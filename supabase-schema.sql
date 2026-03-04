@@ -1,5 +1,5 @@
 -- ============================================
--- 🎬 CinemaForTwo - FULL Database Schema (v2)
+-- 🎬 CinemaForTwo - FULL Database Schema (v3)
 -- ============================================
 -- FRESH INSTALL: Drop everything and run this in Supabase SQL Editor
 -- (Dashboard → SQL Editor → New Query)
@@ -101,6 +101,18 @@ CREATE TABLE IF NOT EXISTS public.friendships (
   CHECK (requester_id != addressee_id)
 );
 
+-- Watch Invites (invite friends to join a watch session)
+CREATE TABLE IF NOT EXISTS public.watch_invites (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  room_id UUID NOT NULL,
+  movie_id UUID REFERENCES public.movies(id) ON DELETE CASCADE NOT NULL,
+  from_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  to_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  UNIQUE(room_id, to_user_id)
+);
+
 
 -- ============================================
 -- 2. INDEXES
@@ -119,6 +131,9 @@ CREATE INDEX IF NOT EXISTS idx_watch_history_movie_id ON public.watch_history(mo
 CREATE INDEX IF NOT EXISTS idx_friendships_requester ON public.friendships(requester_id);
 CREATE INDEX IF NOT EXISTS idx_friendships_addressee ON public.friendships(addressee_id);
 CREATE INDEX IF NOT EXISTS idx_friendships_status ON public.friendships(status);
+CREATE INDEX IF NOT EXISTS idx_watch_invites_to_user ON public.watch_invites(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_watch_invites_room ON public.watch_invites(room_id);
+CREATE INDEX IF NOT EXISTS idx_watch_invites_status ON public.watch_invites(status);
 
 
 -- ============================================
@@ -132,6 +147,7 @@ ALTER TABLE public.watch_rooms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.watch_room_participants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.watch_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.friendships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.watch_invites ENABLE ROW LEVEL SECURITY;
 
 -- ---- PROFILES ----
 
@@ -224,7 +240,6 @@ CREATE POLICY "Authenticated users can create rooms"
   TO authenticated
   WITH CHECK (auth.uid() = host_user_id);
 
--- Any authenticated user can update rooms (needed for playback sync)
 CREATE POLICY "Participants can update rooms"
   ON public.watch_rooms FOR UPDATE
   TO authenticated
@@ -288,12 +303,35 @@ CREATE POLICY "Users can delete their own friendships"
   TO authenticated
   USING (auth.uid() = requester_id OR auth.uid() = addressee_id);
 
+-- ---- WATCH INVITES ----
+
+CREATE POLICY "Users can send invites"
+  ON public.watch_invites FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = from_user_id);
+
+CREATE POLICY "Users can read their own invites"
+  ON public.watch_invites FOR SELECT
+  TO authenticated
+  USING (auth.uid() = from_user_id OR auth.uid() = to_user_id);
+
+CREATE POLICY "Recipient can update invite status"
+  ON public.watch_invites FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = to_user_id)
+  WITH CHECK (auth.uid() = to_user_id);
+
+CREATE POLICY "Users can delete their invites"
+  ON public.watch_invites FOR DELETE
+  TO authenticated
+  USING (auth.uid() = from_user_id OR auth.uid() = to_user_id);
+
 
 -- ============================================
 -- 4. FUNCTIONS & TRIGGERS
 -- ============================================
 
--- Auto-create profile on user signup (new users start as pending)
+-- Auto-create profile on user signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger AS $$
 BEGIN
@@ -338,12 +376,12 @@ CREATE TRIGGER set_friendships_updated_at
   BEFORE UPDATE ON public.friendships
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
--- Enforce max 5 postcards per user
+-- Enforce max 3 postcards per user
 CREATE OR REPLACE FUNCTION public.check_postcard_limit()
 RETURNS trigger AS $$
 BEGIN
-  IF (SELECT COUNT(*) FROM public.postcards WHERE user_id = NEW.user_id) >= 5 THEN
-    RAISE EXCEPTION 'Maximum of 5 postcards per user allowed';
+  IF (SELECT COUNT(*) FROM public.postcards WHERE user_id = NEW.user_id) >= 3 THEN
+    RAISE EXCEPTION 'Maximum of 3 postcards per user allowed';
   END IF;
   RETURN NEW;
 END;
@@ -362,6 +400,7 @@ CREATE TRIGGER enforce_postcard_limit
 ALTER PUBLICATION supabase_realtime ADD TABLE public.watch_rooms;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.watch_room_participants;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.friendships;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.watch_invites;
 
 
 -- ============================================

@@ -122,7 +122,7 @@ export default function BrowsePage() {
 
         {/* Movie Grid */}
         {loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="rounded-2xl overflow-hidden">
                 <div className="aspect-[2/3] shimmer rounded-2xl" />
@@ -153,7 +153,7 @@ export default function BrowsePage() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
             {filteredMovies.map((movie) => (
               <MovieCard key={movie.id} movie={movie} />
             ))}

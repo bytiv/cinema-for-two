@@ -18,6 +18,7 @@ export const CONTAINERS = {
   posters: process.env.AZURE_STORAGE_CONTAINER_POSTERS || 'posters',
   postcards: process.env.AZURE_STORAGE_CONTAINER_POSTCARDS || 'postcards',
   avatars: process.env.AZURE_STORAGE_CONTAINER_AVATARS || 'avatars',
+  subtitles: 'subtitles',
 };
 
 // Ensure all containers exist (private access - we use SAS tokens for reads)

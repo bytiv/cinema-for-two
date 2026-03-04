@@ -57,7 +57,7 @@ export default function WatchRoomPage() {
     setLoading(false);
   }
 
-// Watch room hook (always called, but disabled for solo rooms)
+  // Watch room hook (always called, but disabled for solo rooms)
   const watchRoom = useWatchRoom({
     roomId,
     userId: currentUser?.id || '',
@@ -67,6 +67,25 @@ export default function WatchRoomPage() {
   });
 
   const isWatchTogether = !isSolo && !!currentUser;
+
+  // Subscribe to room status — redirect everyone when host ends session
+  useEffect(() => {
+    if (isSolo) return;
+    const channel = supabase
+      .channel('room-status-' + roomId)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'watch_rooms',
+        filter: `id=eq.${roomId}`,
+      }, (payload) => {
+        if (payload.new.is_active === false) {
+          router.push('/browse');
+        }
+      })
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [roomId, isSolo]);
 
   // Handle incoming playback events from the room
   useEffect(() => {
@@ -103,11 +122,11 @@ export default function WatchRoomPage() {
   };
 
   const handleEndSession = async () => {
-    await supabase
-      .from('watch_rooms')
-      .update({ is_active: false })
-      .eq('id', roomId);
-    router.push(`/movie/${movieId}`);
+    // Mark room inactive — triggers subscription above for all participants
+    await supabase.from('watch_rooms').update({ is_active: false }).eq('id', roomId);
+    // Clear all pending invites for this room
+    await supabase.from('watch_invites').update({ status: 'declined' }).eq('room_id', roomId).eq('status', 'pending');
+    router.push('/browse');
   };
 
   if (loading) {
@@ -198,6 +217,7 @@ export default function WatchRoomPage() {
         <div className="flex-1 relative bg-black">
           <VideoPlayer
             src={videoUrl}
+            subtitles={(movie as any).subtitles || []}
             initialTime={isWatchTogether ? watchRoom.savedTime : 0}
             onPlaybackEvent={handlePlaybackEvent}
             externalControl={externalControl}
@@ -242,6 +262,7 @@ export default function WatchRoomPage() {
           </div>
         </div>
       )}
+
       {/* Invite friend modal */}
       {showInviteModal && movie && (
         <InviteFriendModal
