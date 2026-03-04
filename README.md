@@ -281,3 +281,4 @@ For 2 users with occasional movie watching:
 ---
 
 Built with 💕 for movie nights together.
+# cinema-for-two
