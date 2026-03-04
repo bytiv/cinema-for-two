@@ -6,6 +6,7 @@ export interface Profile {
   avatar_url: string | null;
   role: 'user' | 'admin';
   status: 'pending' | 'approved' | 'denied';
+  bio: string | null;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;

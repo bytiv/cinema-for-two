@@ -150,7 +150,7 @@ export default function ChatPanel({
                 <div className={cn('flex-1 min-w-0 flex flex-col', isMe ? 'items-end' : 'items-start')}>
                   {firstInGroup && (
                     <p className="text-[10px] text-cinema-text-dim mb-0.5 mx-1">
-                      {isMe ? 'You' : msg.user_name}
+                      {isMe ? 'You' : msg.user_name.split(' ')[0]}
                     </p>
                   )}
                   {isEmoji ? (

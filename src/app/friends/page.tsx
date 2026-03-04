@@ -1,16 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Profile, Friendship } from '@/types';
+import { Profile, Friendship, Postcard } from '@/types';
 import Navbar from '@/components/layout/Navbar';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Image from 'next/image';
+import Link from 'next/link';
 import {
   UserPlus, Users, Mail, Check, X, Clock, Heart,
-  Inbox, Send as SendIcon, UserMinus, Film, Play
+  ChevronDown, ChevronUp, Inbox, Send as SendIcon
 } from 'lucide-react';
 import { cn, formatRelativeTime } from '@/lib/utils';
 
@@ -18,37 +18,21 @@ type Tab = 'friends' | 'requests' | 'sent';
 
 export default function FriendsPage() {
   const supabase = createClient();
-  const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
   const [friends, setFriends] = useState<(Friendship & { friendProfile: Profile })[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<(Friendship & { friendProfile: Profile })[]>([]);
   const [sentRequests, setSentRequests] = useState<(Friendship & { friendProfile: Profile })[]>([]);
-  const [watchInvites, setWatchInvites] = useState<{ id: string; room_id: string; movie_id: string; from_user_id: string; fromName: string; movieTitle: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('friends');
   const [email, setEmail] = useState('');
   const [sendLoading, setSendLoading] = useState(false);
   const [sendResult, setSendResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [confirmUnfriend, setConfirmUnfriend] = useState<string | null>(null);
+  const [expandedFriend, setExpandedFriend] = useState<string | null>(null);
+  const [friendPostcards, setFriendPostcards] = useState<Record<string, Postcard[]>>({});
+  const [selectedPostcard, setSelectedPostcard] = useState<Postcard | null>(null);
 
   useEffect(() => {
     loadData();
-
-    let channel: any;
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return;
-      channel = supabase
-        .channel('friends-watch-invites-' + user.id)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'watch_invites',
-          filter: `to_user_id=eq.${user.id}`,
-        }, () => loadData())
-        .subscribe();
-    });
-
-    return () => { channel?.unsubscribe(); };
   }, []);
 
   async function loadData() {
@@ -56,83 +40,58 @@ export default function FriendsPage() {
     if (!user) return;
     setUserId(user.id);
 
+    // Update last_seen
     await supabase.from('profiles').update({ last_seen_at: new Date().toISOString() }).eq('user_id', user.id);
 
-    // Two separate queries instead of .or() to avoid RLS silent failures
-    const [{ data: asRequester }, { data: asAddressee }] = await Promise.all([
-      supabase.from('friendships').select('id, requester_id, addressee_id, status, created_at, updated_at').eq('requester_id', user.id),
-      supabase.from('friendships').select('id, requester_id, addressee_id, status, created_at, updated_at').eq('addressee_id', user.id),
-    ]);
+    // Get all friendships involving this user
+    const { data: friendships } = await supabase
+      .from('friendships')
+      .select('*, requester:profiles!friendships_requester_id_fkey(*), addressee:profiles!friendships_addressee_id_fkey(*)')
+      .or(`requester_id.eq.${user.id},addressee_id.eq.${user.id}`);
 
-    // Collect all unique profile IDs we need to fetch
-    const profileIds = new Set<string>();
-    asRequester?.forEach((f) => profileIds.add(f.addressee_id));
-    asAddressee?.forEach((f) => profileIds.add(f.requester_id));
+    if (friendships) {
+      const accepted: (Friendship & { friendProfile: Profile })[] = [];
+      const incoming: (Friendship & { friendProfile: Profile })[] = [];
+      const sent: (Friendship & { friendProfile: Profile })[] = [];
 
-    let profileMap = new Map<string, Profile>();
-    if (profileIds.size > 0) {
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('*')
-        .in('user_id', Array.from(profileIds));
-      if (profiles) profiles.forEach((p) => profileMap.set(p.user_id, p));
+      for (const f of friendships) {
+        const isRequester = f.requester_id === user.id;
+        const friendProfile = isRequester ? f.addressee : f.requester;
+
+        const enriched = { ...f, friendProfile } as Friendship & { friendProfile: Profile };
+
+        if (f.status === 'accepted') {
+          accepted.push(enriched);
+        } else if (f.status === 'pending') {
+          if (isRequester) {
+            sent.push(enriched);
+          } else {
+            incoming.push(enriched);
+          }
+        }
+      }
+
+      setFriends(accepted);
+      setIncomingRequests(incoming);
+      setSentRequests(sent);
     }
 
-    const accepted: (Friendship & { friendProfile: Profile })[] = [];
-    const incoming: (Friendship & { friendProfile: Profile })[] = [];
-    const sent: (Friendship & { friendProfile: Profile })[] = [];
-
-    asRequester?.forEach((f) => {
-      const fp = profileMap.get(f.addressee_id);
-      if (!fp) return;
-      const enriched = { ...f, friendProfile: fp } as Friendship & { friendProfile: Profile };
-      if (f.status === 'accepted') accepted.push(enriched);
-      else if (f.status === 'pending') sent.push(enriched);
-    });
-
-    asAddressee?.forEach((f) => {
-      const fp = profileMap.get(f.requester_id);
-      if (!fp) return;
-      const enriched = { ...f, friendProfile: fp } as Friendship & { friendProfile: Profile };
-      if (f.status === 'accepted') accepted.push(enriched);
-      else if (f.status === 'pending') incoming.push(enriched);
-    });
-
-    setFriends(accepted);
-    setIncomingRequests(incoming);
-    setSentRequests(sent);
     setLoading(false);
-
-    // Load pending watch invites
-    const { data: inviteData } = await supabase
-      .from('watch_invites')
-      .select('*')
-      .eq('to_user_id', user.id)
-      .eq('status', 'pending');
-
-    if (inviteData && inviteData.length > 0) {
-      const enriched = await Promise.all(inviteData.map(async (inv) => {
-        const [{ data: profile }, { data: movie }] = await Promise.all([
-          supabase.from('profiles').select('first_name, last_name').eq('user_id', inv.from_user_id).single(),
-          supabase.from('movies').select('title').eq('id', inv.movie_id).single(),
-        ]);
-        return {
-          id: inv.id,
-          room_id: inv.room_id,
-          movie_id: inv.movie_id,
-          from_user_id: inv.from_user_id,
-          fromName: profile ? `${profile.first_name} ${profile.last_name}` : 'Someone',
-          movieTitle: movie?.title || 'a movie',
-        };
-      }));
-      setWatchInvites(enriched);
-    }
   }
 
   async function handleSendRequest() {
     if (!email.trim() || !userId) return;
     setSendLoading(true);
     setSendResult(null);
+
+    // Find user by email via auth — we'll look up profiles
+    // Since we can't query auth.users directly, we look for a profile
+    // We need a workaround: check if any profile's user has that email
+    // We'll use an API route or RPC, but for simplicity, look up profiles
+    // Actually, supabase client can't query auth.users. We need to search by email differently.
+    // Workaround: we'll search profiles and match — but profiles don't store email.
+    // Best approach: use the Supabase admin API or create an RPC.
+    // For now, let's use the friends API route.
 
     try {
       const res = await fetch('/api/friends', {
@@ -143,10 +102,7 @@ export default function FriendsPage() {
 
       const data = await res.json();
       if (res.ok) {
-        const msg = data.autoAccepted
-          ? `You're now friends! They had already sent you a request.`
-          : `Friend request sent to ${email}!`;
-        setSendResult({ type: 'success', message: msg });
+        setSendResult({ type: 'success', message: `Friend request sent to ${email}!` });
         setEmail('');
         loadData();
       } else {
@@ -170,19 +126,28 @@ export default function FriendsPage() {
     loadData();
   }
 
+  async function loadFriendPostcards(friendUserId: string) {
+    if (friendPostcards[friendUserId]) {
+      setExpandedFriend(expandedFriend === friendUserId ? null : friendUserId);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('postcards')
+      .select('*')
+      .eq('user_id', friendUserId)
+      .order('created_at');
+
+    if (data) {
+      setFriendPostcards((prev) => ({ ...prev, [friendUserId]: data }));
+    }
+    setExpandedFriend(friendUserId);
+  }
+
   function isOnline(lastSeen: string | null): boolean {
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 30 * 60 * 1000;
-  }
-
-  async function handleAcceptInvite(inviteId: string, movieId: string, roomId: string) {
-    await supabase.from('watch_invites').update({ status: 'accepted' }).eq('id', inviteId);
-    router.push(`/watch/${movieId}/room/${roomId}`);
-  }
-
-  async function handleDeclineInvite(inviteId: string) {
-    await supabase.from('watch_invites').update({ status: 'declined' }).eq('id', inviteId);
-    setWatchInvites((prev) => prev.filter((i) => i.id !== inviteId));
+    const diff = Date.now() - new Date(lastSeen).getTime();
+    return diff < 30 * 60 * 1000; // 30 minutes
   }
 
   const tabs: { key: Tab; label: string; icon: any; count?: number }[] = [
@@ -242,48 +207,6 @@ export default function FriendsPage() {
           )}
         </div>
 
-        {/* Watch invites — always visible above tabs */}
-        {watchInvites.length > 0 && (
-          <div className="mb-6 space-y-2">
-            <p className="text-xs font-semibold text-cinema-text-muted uppercase tracking-wider flex items-center gap-1.5 px-1">
-              <Film className="w-3.5 h-3.5 text-cinema-accent" /> Watch Invitations
-            </p>
-            {watchInvites.map((inv) => (
-              <div
-                key={inv.id}
-                className="flex items-center justify-between p-4 rounded-2xl border border-cinema-accent/25"
-                style={{ background: 'linear-gradient(135deg, rgba(232,160,191,0.07) 0%, rgba(167,139,250,0.05) 100%)' }}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-cinema-accent/15 flex items-center justify-center flex-shrink-0">
-                    <Film className="w-5 h-5 text-cinema-accent" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-cinema-text">
-                      <span className="text-cinema-accent">{inv.fromName}</span> is inviting you to watch
-                    </p>
-                    <p className="text-xs text-cinema-text-dim mt-0.5">🎬 {inv.movieTitle}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    onClick={() => handleAcceptInvite(inv.id, inv.movie_id, inv.room_id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cinema-accent/20 text-cinema-accent hover:bg-cinema-accent/30 border border-cinema-accent/25 transition-colors"
-                  >
-                    <Play className="w-3 h-3" /> Join
-                  </button>
-                  <button
-                    onClick={() => handleDeclineInvite(inv.id)}
-                    className="w-8 h-8 rounded-lg flex items-center justify-center text-cinema-text-dim hover:text-cinema-error hover:bg-cinema-error/10 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         {/* Tabs */}
         <div className="flex gap-2 mb-6">
           {tabs.map(({ key, label, icon: Icon, count }) => (
@@ -330,10 +253,15 @@ export default function FriendsPage() {
                   friends.map((f) => {
                     const fp = f.friendProfile;
                     const online = isOnline(fp.last_seen_at);
+                    const isExpanded = expandedFriend === fp.user_id;
+                    const postcards = friendPostcards[fp.user_id] || [];
 
                     return (
-                      <div key={f.id} className="bg-cinema-card/50 border border-cinema-border rounded-2xl">
-                        <div className="flex items-center justify-between p-4">
+                      <div key={f.id} className="bg-cinema-card/50 border border-cinema-border rounded-2xl overflow-hidden">
+                        <div
+                          className="flex items-center justify-between p-4 cursor-pointer hover:bg-cinema-surface/30 transition-colors"
+                          onClick={() => loadFriendPostcards(fp.user_id)}
+                        >
                           <div className="flex items-center gap-3">
                             <div className="relative">
                               <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center overflow-hidden">
@@ -345,15 +273,20 @@ export default function FriendsPage() {
                                   </span>
                                 )}
                               </div>
+                              {/* Online indicator */}
                               <div className={cn(
                                 'absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-cinema-card',
                                 online ? 'bg-cinema-success' : 'bg-cinema-text-dim'
                               )} />
                             </div>
                             <div>
-                              <p className="font-medium text-cinema-text">
-                                {fp.first_name} {fp.last_name}
-                              </p>
+                              <Link
+                            href={`/user/${fp.user_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-medium text-cinema-text hover:text-cinema-accent transition-colors"
+                          >
+                            {fp.first_name} {fp.last_name}
+                          </Link>
                               <p className="text-xs text-cinema-text-dim">
                                 {online ? (
                                   <span className="text-cinema-success">Online now</span>
@@ -365,32 +298,51 @@ export default function FriendsPage() {
                               </p>
                             </div>
                           </div>
-                          {/* Unfriend */}
-                          {confirmUnfriend === f.id ? (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                onClick={() => { handleDeny(f.id); setConfirmUnfriend(null); }}
-                                className="text-xs px-2 py-1 rounded-lg bg-cinema-error/15 text-cinema-error hover:bg-cinema-error/25 transition-colors"
-                              >
-                                Unfriend
-                              </button>
-                              <button
-                                onClick={() => setConfirmUnfriend(null)}
-                                className="text-xs px-2 py-1 rounded-lg bg-cinema-card text-cinema-text-muted hover:text-cinema-text transition-colors"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setConfirmUnfriend(f.id)}
-                              className="w-7 h-7 rounded-lg flex items-center justify-center text-cinema-text-dim hover:text-cinema-error hover:bg-cinema-error/10 transition-colors"
-                              title="Unfriend"
-                            >
-                              <UserMinus className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-cinema-text-dim">Postcards</span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-4 h-4 text-cinema-text-muted" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-cinema-text-muted" />
+                            )}
+                          </div>
                         </div>
+
+                        {/* Expanded postcards */}
+                        {isExpanded && (
+                          <div className="px-4 pb-4 border-t border-cinema-border/50 pt-3">
+                            {postcards.length === 0 ? (
+                              <p className="text-sm text-cinema-text-dim text-center py-4">
+                                No postcards yet
+                              </p>
+                            ) : (
+                              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                                {postcards.map((pc) => (
+                                  <div
+                                    key={pc.id}
+                                    className="relative rounded-lg overflow-hidden aspect-[3/4] bg-cinema-surface cursor-pointer group transition-transform duration-300 hover:scale-105 hover:z-10 hover:shadow-2xl hover:shadow-cinema-accent/20"
+                                    onClick={() => setSelectedPostcard(pc)}
+                                  >
+                                    <Image
+                                      src={pc.image_url}
+                                      alt={pc.caption || 'Postcard'}
+                                      fill
+                                      className="object-cover transition-transform duration-300 group-hover:scale-110"
+                                      sizes="120px"
+                                    />
+                                    {pc.caption && (
+                                      <div className="absolute bottom-0 left-0 right-0 bg-white/90 py-1 px-1.5">
+                                        <p className="text-[8px] text-gray-600 text-center truncate">
+                                          {pc.caption}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -412,14 +364,10 @@ export default function FriendsPage() {
                     return (
                       <div key={f.id} className="flex items-center justify-between p-4 bg-cinema-card/50 border border-cinema-border rounded-2xl">
                         <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center overflow-hidden">
-                            {fp.avatar_url ? (
-                              <Image src={fp.avatar_url} alt="" width={44} height={44} className="object-cover" />
-                            ) : (
-                              <span className="text-sm font-bold text-cinema-bg">
-                                {fp.first_name.charAt(0)}{fp.last_name.charAt(0)}
-                              </span>
-                            )}
+                          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center">
+                            <span className="text-sm font-bold text-cinema-bg">
+                              {fp.first_name.charAt(0)}{fp.last_name.charAt(0)}
+                            </span>
                           </div>
                           <div>
                             <p className="font-medium text-cinema-text">{fp.first_name} {fp.last_name}</p>
@@ -465,14 +413,10 @@ export default function FriendsPage() {
                     return (
                       <div key={f.id} className="flex items-center justify-between p-4 bg-cinema-card/50 border border-cinema-border rounded-2xl">
                         <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-warm to-cinema-accent flex items-center justify-center overflow-hidden">
-                            {fp.avatar_url ? (
-                              <Image src={fp.avatar_url} alt="" width={44} height={44} className="object-cover" />
-                            ) : (
-                              <span className="text-sm font-bold text-cinema-bg">
-                                {fp.first_name.charAt(0)}{fp.last_name.charAt(0)}
-                              </span>
-                            )}
+                          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-warm to-cinema-accent flex items-center justify-center">
+                            <span className="text-sm font-bold text-cinema-bg">
+                              {fp.first_name.charAt(0)}{fp.last_name.charAt(0)}
+                            </span>
                           </div>
                           <div>
                             <p className="font-medium text-cinema-text">{fp.first_name} {fp.last_name}</p>
@@ -497,6 +441,43 @@ export default function FriendsPage() {
         )}
       </main>
 
+      {/* Postcard full-view modal */}
+      {selectedPostcard && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setSelectedPostcard(null)}
+        >
+          <div
+            className="relative max-w-lg w-full animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative rounded-2xl overflow-hidden shadow-2xl bg-white">
+              <div className="relative aspect-[4/5]">
+                <Image
+                  src={selectedPostcard.image_url}
+                  alt={selectedPostcard.caption || 'Postcard'}
+                  fill
+                  className="object-cover"
+                  sizes="500px"
+                />
+              </div>
+              {selectedPostcard.caption && (
+                <div className="bg-white py-3 px-4">
+                  <p className="text-sm text-gray-700 text-center font-body">
+                    {selectedPostcard.caption}
+                  </p>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setSelectedPostcard(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-cinema-card border border-cinema-border flex items-center justify-center hover:bg-cinema-error transition-colors"
+            >
+              <X className="w-4 h-4 text-cinema-text" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
