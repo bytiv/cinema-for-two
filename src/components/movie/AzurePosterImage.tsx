@@ -59,7 +59,7 @@ export default function AzurePosterImage({
   }, [posterUrl]);
 
   if (!posterUrl || error || !resolvedUrl) {
-    return <>{fallback}</> ?? null;
+    return <>{fallback ?? null}</>;
   }
 
   const imageProps = {
