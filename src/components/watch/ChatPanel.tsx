@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, MessageCircle, X, Smile, ChevronLeft } from 'lucide-react';
+import { Send, MessageCircle, X, Smile } from 'lucide-react';
 import { ChatMessage, PresenceState } from '@/types';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
@@ -56,15 +56,14 @@ export default function ChatPanel({
     return (
       <button
         onClick={onToggle}
-        className="fixed top-1/2 -translate-y-1/2 right-0 z-30 flex items-center justify-center w-6 h-16 rounded-l-xl bg-cinema-surface/90 border border-r-0 border-cinema-border backdrop-blur-sm hover:bg-cinema-card transition-colors"
-        title="Open chat"
+        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-cinema-accent shadow-lg shadow-cinema-accent/30 flex items-center justify-center hover:scale-110 transition-transform z-30"
       >
+        <MessageCircle className="w-6 h-6 text-cinema-bg" />
         {messages.length > 0 && (
-          <span className="absolute -top-2 left-0 w-4 h-4 rounded-full bg-cinema-accent text-cinema-bg text-[8px] font-bold flex items-center justify-center leading-none">
+          <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-cinema-warm text-cinema-bg text-xs flex items-center justify-center font-bold">
             {messages.length > 9 ? '9+' : messages.length}
           </span>
         )}
-        <ChevronLeft className="w-3.5 h-3.5 text-cinema-accent" />
       </button>
     );
   }
@@ -112,7 +111,7 @@ export default function ChatPanel({
         )}
         {messages.map((msg, idx) => {
           const isMe = msg.user_id === currentUserId;
-          const isEmoji = /^[\p{Emoji}]+$/u.test(msg.message) && msg.message.length <= 8;
+          const isEmoji = msg.message.length <= 8 && !msg.message.match(/[a-zA-Z0-9]/);
           const isSystem = msg.type === 'system';
           const firstInGroup = isFirstInGroup(idx);
 
