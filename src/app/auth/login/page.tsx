@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
@@ -8,7 +8,8 @@ import { Mail, Lock, Heart, Eye, EyeOff } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 
-export default function LoginPage() {
+// Separated into its own component so useSearchParams can be wrapped in Suspense
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get('redirect') || '/browse';
@@ -38,6 +39,55 @@ export default function LoginPage() {
   };
 
   return (
+    <form onSubmit={handleLogin} className="space-y-4">
+      <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-4">
+        <Input
+          id="email"
+          type="email"
+          label="Email"
+          placeholder="you@example.com"
+          icon={<Mail className="w-4 h-4" />}
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+
+        <div className="relative">
+          <Input
+            id="password"
+            type={showPassword ? 'text' : 'password'}
+            label="Password"
+            placeholder="Your password"
+            icon={<Lock className="w-4 h-4" />}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-[38px] text-cinema-text-dim hover:text-cinema-text-muted transition-colors"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+
+        {error && (
+          <div className="p-3 rounded-xl bg-cinema-error/10 border border-cinema-error/20 text-cinema-error text-sm">
+            {error}
+          </div>
+        )}
+
+        <Button type="submit" loading={loading} className="w-full" size="lg" icon={<Heart className="w-4 h-4" />}>
+          Sign In
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <div className="min-h-screen flex items-center justify-center px-4">
       {/* Background effects */}
       <div className="fixed inset-0 z-0">
@@ -57,51 +107,10 @@ export default function LoginPage() {
           <p className="text-cinema-text-muted">Sign in to your cozy cinema</p>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-4">
-            <Input
-              id="email"
-              type="email"
-              label="Email"
-              placeholder="you@example.com"
-              icon={<Mail className="w-4 h-4" />}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-
-            <div className="relative">
-              <Input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                label="Password"
-                placeholder="Your password"
-                icon={<Lock className="w-4 h-4" />}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-[38px] text-cinema-text-dim hover:text-cinema-text-muted transition-colors"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-
-            {error && (
-              <div className="p-3 rounded-xl bg-cinema-error/10 border border-cinema-error/20 text-cinema-error text-sm">
-                {error}
-              </div>
-            )}
-
-            <Button type="submit" loading={loading} className="w-full" size="lg" icon={<Heart className="w-4 h-4" />}>
-              Sign In
-            </Button>
-          </div>
-        </form>
+        {/* Suspense boundary required for useSearchParams in Next.js 14 */}
+        <Suspense fallback={<div className="h-48 bg-cinema-card/50 rounded-2xl animate-pulse" />}>
+          <LoginForm />
+        </Suspense>
 
         <p className="text-center text-cinema-text-muted text-sm mt-6">
           Don&apos;t have an account?{' '}
