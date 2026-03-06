@@ -318,7 +318,7 @@ export default function ProfilePage() {
               <p className="text-xs text-cinema-text-dim text-right">{bio.length}/200</p>
             </div>
 
-            {/* Hide online status toggle */}
+            {/* Hide online status toggle
             <div className="flex items-center justify-between gap-4 p-3 rounded-xl bg-cinema-card border border-cinema-border mb-4">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-cinema-text">Hide online status</p>
@@ -337,7 +337,7 @@ export default function ProfilePage() {
                   hideOnline ? 'translate-x-5' : 'translate-x-0'
                 )} />
               </button>
-            </div>
+            </div> */}
 
             <Button onClick={handleSaveProfile} loading={saving} icon={<Save className="w-4 h-4" />}>
               Save Changes
