@@ -71,7 +71,11 @@ export default function ChatPanel({
       {/* ── Chat panel ── */}
       <div className={cn(
         'h-full flex flex-col bg-cinema-surface border-l border-cinema-border transition-all duration-300 overflow-hidden',
-        isOpen ? 'w-80' : 'w-0'
+        // On mobile: full width overlay when open, hidden when closed
+        // On desktop (sm+): fixed 320px sidebar
+        isOpen
+          ? 'w-screen sm:w-80'
+          : 'w-0'
       )}>
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-cinema-border flex-shrink-0">
@@ -79,23 +83,33 @@ export default function ChatPanel({
             <MessageCircle className="w-5 h-5 text-cinema-accent" />
             <span className="font-display font-semibold text-cinema-text">Chat</span>
           </div>
-          {/* Presence indicators */}
-          <div className="flex -space-x-2">
-            {presence.map((p) => (
-              <div
-                key={p.user_id}
-                className="w-7 h-7 rounded-full border-2 border-cinema-surface bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center overflow-hidden"
-                title={p.user_name}
-              >
-                {p.avatar_url ? (
-                  <Image src={p.avatar_url} alt={p.user_name} width={28} height={28} className="object-cover" />
-                ) : (
-                  <span className="text-[10px] font-bold text-cinema-bg">
-                    {p.user_name.charAt(0).toUpperCase()}
-                  </span>
-                )}
-              </div>
-            ))}
+          <div className="flex items-center gap-3">
+            {/* Presence indicators */}
+            <div className="flex -space-x-2">
+              {presence.map((p) => (
+                <div
+                  key={p.user_id}
+                  className="w-7 h-7 rounded-full border-2 border-cinema-surface bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center overflow-hidden"
+                  title={p.user_name}
+                >
+                  {p.avatar_url ? (
+                    <Image src={p.avatar_url} alt={p.user_name} width={28} height={28} className="object-cover" />
+                  ) : (
+                    <span className="text-[10px] font-bold text-cinema-bg">
+                      {p.user_name.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* Close button — visible on mobile only */}
+            <button
+              onClick={onToggle}
+              className="sm:hidden text-cinema-text-muted hover:text-cinema-accent transition-colors"
+              title="Close chat"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
         </div>
 

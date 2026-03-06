@@ -121,36 +121,39 @@ export default function BrowsePage() {
 
         {/* Filter tabs + search + sort */}
         <div className="space-y-3 mb-8">
-          {/* Filter tabs */}
-          <div className="flex gap-2">
-            {filterTabs.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => setFilterBy(key)}
-                className={cn(
-                  'flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border',
-                  filterBy === key
-                    ? 'bg-cinema-accent/15 text-cinema-accent border-cinema-accent/30'
-                    : 'bg-cinema-card border-cinema-border text-cinema-text-muted hover:text-cinema-text'
-                )}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {label}
-                <span className={cn(
-                  'text-xs px-1.5 py-0.5 rounded-md',
-                  filterBy === key ? 'bg-cinema-accent/20 text-cinema-accent' : 'bg-cinema-surface text-cinema-text-dim'
-                )}>
-                  {key === 'all' && allMovies.length}
-                  {key === 'mine' && allMovies.filter(m => myIds.has(m.uploaded_by)).length}
-                  {key === 'friends' && allMovies.filter(m => friendIds.has(m.uploaded_by)).length}
-                </span>
-              </button>
-            ))}
+          {/* Filter tabs row + admin toggle on its own line */}
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-2 flex-wrap">
+              {filterTabs.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setFilterBy(key)}
+                  className={cn(
+                    'flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border',
+                    filterBy === key
+                      ? 'bg-cinema-accent/15 text-cinema-accent border-cinema-accent/30'
+                      : 'bg-cinema-card border-cinema-border text-cinema-text-muted hover:text-cinema-text'
+                  )}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {label}
+                  <span className={cn(
+                    'text-xs px-1.5 py-0.5 rounded-md',
+                    filterBy === key ? 'bg-cinema-accent/20 text-cinema-accent' : 'bg-cinema-surface text-cinema-text-dim'
+                  )}>
+                    {key === 'all' && allMovies.length}
+                    {key === 'mine' && allMovies.filter(m => myIds.has(m.uploaded_by)).length}
+                    {key === 'friends' && allMovies.filter(m => friendIds.has(m.uploaded_by)).length}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {/* Admin global toggle — separate row so it never crowds the filter tabs */}
             {isAdmin && (
               <button
                 onClick={() => setAdminViewActive((v) => !v)}
                 className={cn(
-                  'ml-auto flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl border transition-all',
+                  'self-start flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl border transition-all',
                   adminViewActive
                     ? 'bg-cinema-accent/15 text-cinema-accent border-cinema-accent/30'
                     : 'bg-cinema-card text-cinema-text-dim border-cinema-border hover:text-cinema-text'

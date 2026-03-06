@@ -45,9 +45,9 @@ const TRAIL_COLORS = [
 // ─── Tuning ─────────────────────────────────────────────────────────────────
 const CHASE_SPEED   = 1.55;
 const FLEE_SPEED    = 2.10;
-const PATROL_SPEED  = 0.80;
-const IDLE_SPEED    = 0.20;
-const MOUSE_SLOW    = 0.30;
+const PATROL_SPEED  = 0.38;
+const IDLE_SPEED    = 0.10;
+const MOUSE_SLOW    = 0.15;
 const MOUSE_R       = 110;
 
 // Each card belongs to a "side" — left 50% or right 50%.
@@ -59,10 +59,10 @@ const CENTER_BAND      = 0.14;    // half-width of repel band around center
 const CENTER_PUSH      = 0.018;
 const EDGE_PAD         = 55;
 const EDGE_PUSH        = 0.005;
-const SEPARATION_R     = 80;      // px — cards push apart if too close (prevents clustering)
+const SEPARATION_R     = 110;     // px — cards push apart if too close (prevents clustering)
 const SEPARATION_F     = 0.025;
 
-const TOUCH_DIST   = 60;
+const TOUCH_DIST   = 80;
 const TOUCH_CD     = 120;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -295,7 +295,7 @@ export default function FloatingPostcards() {
 
         } else {
           // patrol / idle: gentle wander along edges
-          const w = c.mode.kind === 'idle' ? 0.025 : 0.05;
+          const w = c.mode.kind === 'idle' ? 0.012 : 0.025;
           ax += (Math.random() - 0.5) * w;
           ay += (Math.random() - 0.5) * w;
         }
@@ -345,7 +345,7 @@ export default function FloatingPostcards() {
           : c.mode.kind === 'chase'  ? CHASE_SPEED
           : c.mode.kind === 'idle'   ? IDLE_SPEED
           : PATROL_SPEED;
-        const minSpd = c.mode.kind === 'idle' ? 0 : 0.20;
+        const minSpd = c.mode.kind === 'idle' ? 0 : 0.10;
         if (spd > maxSpd && spd > 0) { c.vx = (c.vx / spd) * maxSpd; c.vy = (c.vy / spd) * maxSpd; }
         if (spd < minSpd && spd > 0) { c.vx = (c.vx / spd) * minSpd; c.vy = (c.vy / spd) * minSpd; }
 
@@ -424,10 +424,10 @@ export default function FloatingPostcards() {
               onClick={() => setSelected(pc)}
             >
               <div
-                style={{ width: big ? 82 : 60, height: big ? 98 : 72 }}
+                style={{ width: big ? 120 : 88, height: big ? 144 : 106 }}
                 className="relative rounded-lg overflow-hidden shadow-xl border border-white/10"
               >
-                <Image src={pc.image_url} alt={pc.caption || 'Memory'} fill className="object-cover" sizes="100px" />
+                <Image src={pc.image_url} alt={pc.caption || 'Memory'} fill className="object-cover" sizes="150px" />
               </div>
             </div>
           );
