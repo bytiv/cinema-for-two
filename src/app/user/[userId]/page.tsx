@@ -11,6 +11,7 @@ import { ArrowLeft, Film, Clock, Heart, User, Pencil, Save, X } from 'lucide-rea
 import { formatRelativeTime } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { useAdminMode } from '@/contexts/AdminModeContext';
+import PostcardModal from '@/components/postcards/PostcardModal';
 
 export default function UserProfilePage() {
   const params = useParams();
@@ -343,37 +344,9 @@ export default function UserProfilePage() {
       )}
 
       {/* Postcard full-view modal */}
-      {selectedPostcard && (
-        <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setSelectedPostcard(null)}
-        >
-          <div className="relative max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="relative rounded-2xl overflow-hidden shadow-2xl bg-white">
-              <div className="relative aspect-[4/5]">
-                <Image
-                  src={selectedPostcard.image_url}
-                  alt={selectedPostcard.caption || 'Postcard'}
-                  fill
-                  className="object-cover"
-                  sizes="500px"
-                />
-              </div>
-              {selectedPostcard.caption && (
-                <div className="bg-cinema-bg py-3 px-4">
-                  <p className="text-sm text-cinema-text-muted text-center">{selectedPostcard.caption}</p>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => setSelectedPostcard(null)}
-              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-cinema-card border border-cinema-border flex items-center justify-center hover:bg-cinema-error transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4 text-cinema-text rotate-[135deg]" />
-            </button>
-          </div>
-        </div>
-      )}
+           {selectedPostcard && (
+             <PostcardModal postcard={selectedPostcard} onClose={() => setSelectedPostcard(null)} />
+           )}
     </div>
   );
 }

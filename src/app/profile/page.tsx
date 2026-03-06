@@ -333,8 +333,8 @@ export default function ProfilePage() {
                 )}
               >
                 <span className={cn(
-                  'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-                  hideOnline ? 'translate-x-[1.375rem]' : 'translate-x-1'
+                  'absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                  hideOnline ? 'translate-x-5' : 'translate-x-0'
                 )} />
               </button>
             </div>
@@ -446,8 +446,8 @@ export default function ProfilePage() {
                 )}
               >
                 <span className={cn(
-                  'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-                  postcardsDisabled ? 'translate-x-[1.375rem]' : 'translate-x-1'
+                  'absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                  postcardsDisabled ? 'translate-x-5' : 'translate-x-0'
                 )} />
               </button>
             </div>
@@ -518,8 +518,8 @@ export default function ProfilePage() {
                           )}
                         >
                           <span className={cn(
-                            'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-                            sharing ? 'translate-x-[1.375rem]' : 'translate-x-1'
+                            'absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                            sharing ? 'translate-x-5' : 'translate-x-0'
                           )} />
                         </button>
                       </div>

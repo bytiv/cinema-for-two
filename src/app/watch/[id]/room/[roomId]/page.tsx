@@ -4,37 +4,43 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Movie, Profile, PlaybackEvent } from '@/types';
-import Navbar from '@/components/layout/Navbar';
 import VideoPlayer from '@/components/watch/VideoPlayer';
 import ChatPanel from '@/components/watch/ChatPanel';
 import Button from '@/components/ui/Button';
 import { useWatchRoom } from '@/hooks/useWatchRoom';
-import { ArrowLeft, Copy, Check, Users, Crown, Power, UserPlus } from 'lucide-react';
+import { ArrowLeft, Copy, Check, Users, Power, UserPlus, MessageCircle, X } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import InviteFriendModal from '@/components/watch/InviteFriendModal';
 
 export default function WatchRoomPage() {
-  const params = useParams();
-  const router = useRouter();
+  const params   = useParams();
+  const router   = useRouter();
   const supabase = createClient();
-  const movieId = params.id as string;
-  const roomId = params.roomId as string;
-  const isSolo = roomId === 'solo';
+  const movieId  = params.id as string;
+  const roomId   = params.roomId as string;
+  const isSolo   = roomId === 'solo';
 
-  const [movie, setMovie] = useState<Movie | null>(null);
-  const [currentUser, setCurrentUser] = useState<{ id: string; profile: Profile } | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [chatOpen, setChatOpen] = useState(!isSolo);
-  const [copied, setCopied] = useState(false);
+  const [movie,           setMovie]           = useState<Movie | null>(null);
+  const [currentUser,     setCurrentUser]     = useState<{ id: string; profile: Profile } | null>(null);
+  const [videoUrl,        setVideoUrl]        = useState<string | null>(null);
+  const [loading,         setLoading]         = useState(true);
+  const [chatOpen,        setChatOpen]        = useState(false);   // mobile: drawer closed by default
+  const [desktopChat,     setDesktopChat]     = useState(true);    // desktop sidebar
+  const [copied,          setCopied]          = useState(false);
   const [externalControl, setExternalControl] = useState<{ type: 'play' | 'pause' | 'seek'; timestamp: number } | null>(null);
-  const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showEndConfirm,  setShowEndConfirm]  = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [isMobile,        setIsMobile]        = useState(false);
 
   useEffect(() => {
-    loadData();
-  }, [movieId]);
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
+  useEffect(() => { loadData(); }, [movieId]);
 
   async function loadData() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -45,8 +51,6 @@ export default function WatchRoomPage() {
       supabase.from('profiles').select('*').eq('user_id', user.id).single(),
     ]);
 
-    // If joining a real room (not solo), register as a participant first.
-    // This is what grants stream access for non-friends joining via share link.
     if (!isSolo && roomId) {
       await supabase.from('watch_room_participants').upsert(
         { room_id: roomId, user_id: user.id },
@@ -57,46 +61,33 @@ export default function WatchRoomPage() {
     if (movieRes.data) {
       setMovie(movieRes.data);
       const res = await fetch(`/api/movies/stream?blobName=${encodeURIComponent(movieRes.data.blob_name)}`);
-      if (res.ok) {
-        const { url } = await res.json();
-        setVideoUrl(url);
-      }
+      if (res.ok) { const { url } = await res.json(); setVideoUrl(url); }
     }
     if (profileRes.data) setCurrentUser({ id: user.id, profile: profileRes.data });
     setLoading(false);
   }
 
-  // Watch room hook (always called, but disabled for solo rooms)
   const watchRoom = useWatchRoom({
     roomId,
-    userId: currentUser?.id || '',
-    userName: currentUser ? `${currentUser.profile.first_name} ${currentUser.profile.last_name}` : '',
+    userId:    currentUser?.id || '',
+    userName:  currentUser ? `${currentUser.profile.first_name} ${currentUser.profile.last_name}` : '',
     avatarUrl: currentUser?.profile.avatar_url || null,
-    enabled: !isSolo && !!currentUser,
+    enabled:   !isSolo && !!currentUser,
   });
 
   const isWatchTogether = !isSolo && !!currentUser;
 
-  // Subscribe to room status — redirect everyone when host ends session
   useEffect(() => {
     if (isSolo) return;
     const channel = supabase
       .channel('room-status-' + roomId)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'watch_rooms',
-        filter: `id=eq.${roomId}`,
-      }, (payload) => {
-        if (payload.new.is_active === false) {
-          router.push('/browse');
-        }
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'watch_rooms', filter: `id=eq.${roomId}` }, (payload) => {
+        if (payload.new.is_active === false) router.push('/browse');
       })
       .subscribe();
     return () => { channel.unsubscribe(); };
   }, [roomId, isSolo]);
 
-  // Handle incoming playback events from the room
   useEffect(() => {
     if (!isWatchTogether || !watchRoom.lastPlaybackEvent) return;
     const evt = watchRoom.lastPlaybackEvent;
@@ -104,36 +95,23 @@ export default function WatchRoomPage() {
   }, [watchRoom.lastPlaybackEvent, isWatchTogether]);
 
   const handlePlaybackEvent = (event: { type: 'play' | 'pause' | 'seek'; timestamp: number }) => {
-    if (isWatchTogether) {
-      watchRoom.sendPlaybackEvent({
-        type: event.type,
-        timestamp: event.timestamp,
-      });
-    }
-
-    // Record watch history progress
+    if (isWatchTogether) watchRoom.sendPlaybackEvent({ type: event.type, timestamp: event.timestamp });
     if (currentUser && movie && event.type === 'pause') {
       supabase.from('watch_history').upsert({
-        user_id: currentUser.id,
-        movie_id: movie.id,
-        progress_seconds: Math.floor(event.timestamp),
-        completed: false,
-        watched_at: new Date().toISOString(),
+        user_id: currentUser.id, movie_id: movie.id,
+        progress_seconds: Math.floor(event.timestamp), completed: false, watched_at: new Date().toISOString(),
       }, { onConflict: 'user_id,movie_id' }).then(() => {});
     }
   };
 
   const copyRoomLink = () => {
-    const url = `${window.location.origin}/watch/${movieId}/room/${roomId}`;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(`${window.location.origin}/watch/${movieId}/room/${roomId}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleEndSession = async () => {
-    // Mark room inactive — triggers subscription above for all participants
     await supabase.from('watch_rooms').update({ is_active: false }).eq('id', roomId);
-    // Clear all pending invites for this room
     await supabase.from('watch_invites').update({ status: 'declined' }).eq('room_id', roomId).eq('status', 'pending');
     router.push('/browse');
   };
@@ -162,22 +140,26 @@ export default function WatchRoomPage() {
     );
   }
 
+  // ── Unread badge ─────────────────────────────────────────────────────────
+  const unreadCount = !chatOpen && isWatchTogether ? watchRoom.messages.filter(m => m.user_id !== currentUser?.id).slice(-1).length : 0;
+
   return (
-    <div className="h-screen flex flex-col bg-black">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-cinema-bg/90 backdrop-blur-sm border-b border-cinema-border/30 z-20">
-        <div className="flex items-center gap-4">
-          <Link href={`/movie/${movieId}`} className="text-cinema-text-muted hover:text-cinema-text transition-colors">
+    <div className="h-[100dvh] flex flex-col bg-black overflow-hidden">
+
+      {/* ── Top bar ── */}
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2 bg-cinema-bg/95 backdrop-blur-sm border-b border-cinema-border/30 z-20 flex-shrink-0">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+          <Link href={`/movie/${movieId}`} className="text-cinema-text-muted hover:text-cinema-text transition-colors flex-shrink-0">
             <ArrowLeft className="w-5 h-5" />
           </Link>
-          <div>
-            <h1 className="font-display text-lg font-semibold text-cinema-text truncate max-w-xs sm:max-w-md">
+          <div className="min-w-0">
+            <h1 className="font-display text-sm sm:text-lg font-semibold text-cinema-text truncate max-w-[140px] sm:max-w-xs md:max-w-md">
               {movie.title}
             </h1>
             {!isSolo && (
-              <div className="flex items-center gap-2 text-xs text-cinema-text-muted">
-                <Users className="w-3 h-3 text-cinema-warm" />
-                <span>Watching Together</span>
+              <div className="flex items-center gap-1.5 text-xs text-cinema-text-muted">
+                <Users className="w-3 h-3 text-cinema-warm flex-shrink-0" />
+                <span className="hidden sm:inline">Watching Together</span>
                 {watchRoom.presence && (
                   <span className="text-cinema-accent">
                     ({watchRoom.presence.length} {watchRoom.presence.length === 1 ? 'person' : 'people'})
@@ -188,42 +170,58 @@ export default function WatchRoomPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
           {!isSolo && (
             <>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={copied ? <Check className="w-4 h-4 text-cinema-success" /> : <Copy className="w-4 h-4" />}
+              {/* Desktop-only buttons */}
+              <div className="hidden sm:flex items-center gap-2">
+                <Button variant="ghost" size="sm" icon={copied ? <Check className="w-4 h-4 text-cinema-success" /> : <Copy className="w-4 h-4" />} onClick={copyRoomLink}>
+                  {copied ? 'Copied!' : 'Share'}
+                </Button>
+                <Button variant="secondary" size="sm" icon={<UserPlus className="w-4 h-4" />} onClick={() => setShowInviteModal(true)}>
+                  Invite
+                </Button>
+              </div>
+              {/* Mobile: just copy + invite icons */}
+              <button
                 onClick={copyRoomLink}
+                className="sm:hidden w-8 h-8 rounded-lg flex items-center justify-center bg-cinema-surface border border-cinema-border text-cinema-text-muted hover:text-cinema-text transition-colors"
               >
-                {copied ? 'Copied!' : 'Share Link'}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={<UserPlus className="w-4 h-4" />}
+                {copied ? <Check className="w-4 h-4 text-cinema-success" /> : <Copy className="w-4 h-4" />}
+              </button>
+              <button
                 onClick={() => setShowInviteModal(true)}
+                className="sm:hidden w-8 h-8 rounded-lg flex items-center justify-center bg-cinema-surface border border-cinema-border text-cinema-text-muted hover:text-cinema-text transition-colors"
               >
-                Invite Friend
-              </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                icon={<Power className="w-4 h-4" />}
-                onClick={() => setShowEndConfirm(true)}
+                <UserPlus className="w-4 h-4" />
+              </button>
+
+              {/* Chat toggle button — mobile only */}
+              <button
+                onClick={() => setChatOpen(v => !v)}
+                className="md:hidden relative w-8 h-8 rounded-lg flex items-center justify-center bg-cinema-surface border border-cinema-border text-cinema-text-muted hover:text-cinema-text transition-colors"
               >
-                End Session
+                <MessageCircle className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-cinema-accent text-cinema-bg text-[9px] font-bold flex items-center justify-center">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              <Button variant="danger" size="sm" icon={<Power className="w-3.5 h-3.5 sm:w-4 sm:h-4" />} onClick={() => setShowEndConfirm(true)}>
+                <span className="hidden sm:inline">End Session</span>
               </Button>
             </>
           )}
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Video area */}
-        <div className="flex-1 relative bg-black">
+      {/* ── Main content area ── */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+
+        {/* Video */}
+        <div className="relative bg-black flex-1 min-h-0">
           <VideoPlayer
             src={videoUrl}
             subtitles={(movie as any).subtitles || []}
@@ -234,20 +232,68 @@ export default function WatchRoomPage() {
           />
         </div>
 
-        {/* Chat panel */}
+        {/* Desktop sidebar chat */}
         {isWatchTogether && currentUser && (
-          <ChatPanel
-            messages={watchRoom.messages}
-            presence={watchRoom.presence}
-            onSendMessage={watchRoom.sendMessage}
-            currentUserId={currentUser.id}
-            isOpen={chatOpen}
-            onToggle={() => setChatOpen(!chatOpen)}
-          />
+          <div className="hidden md:flex">
+            <ChatPanel
+              messages={watchRoom.messages}
+              presence={watchRoom.presence}
+              onSendMessage={watchRoom.sendMessage}
+              currentUserId={currentUser.id}
+              isOpen={desktopChat}
+              onToggle={() => setDesktopChat(v => !v)}
+            />
+          </div>
         )}
       </div>
 
-      {/* End session confirmation */}
+      {/* ── Mobile chat drawer ── */}
+      {isWatchTogether && currentUser && (
+        <>
+          {/* Backdrop */}
+          {chatOpen && (
+            <div
+              className="md:hidden fixed inset-0 bg-black/60 z-40"
+              onClick={() => setChatOpen(false)}
+            />
+          )}
+          {/* Drawer — slides up from bottom */}
+          <div
+            className={cn(
+              'md:hidden fixed bottom-0 left-0 right-0 z-50 flex flex-col',
+              'bg-cinema-surface border-t border-cinema-border rounded-t-2xl',
+              'transition-transform duration-300 ease-in-out',
+              chatOpen ? 'translate-y-0' : 'translate-y-full'
+            )}
+            style={{ height: '70dvh' }}
+          >
+            {/* Drawer handle + close */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-cinema-border flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-1 rounded-full bg-cinema-border mx-auto" />
+              </div>
+              <span className="font-display font-semibold text-cinema-text text-sm">Chat</span>
+              <button onClick={() => setChatOpen(false)} className="text-cinema-text-muted hover:text-cinema-text transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Reuse ChatPanel without its own header toggle */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <ChatPanel
+                messages={watchRoom.messages}
+                presence={watchRoom.presence}
+                onSendMessage={watchRoom.sendMessage}
+                currentUserId={currentUser.id}
+                isOpen={true}
+                onToggle={() => setChatOpen(false)}
+                hideSidebarToggle
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── End session confirm ── */}
       {showEndConfirm && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowEndConfirm(false)}>
           <div className="bg-cinema-card border border-cinema-border rounded-2xl p-6 max-w-sm w-full space-y-4" onClick={(e) => e.stopPropagation()}>
@@ -256,30 +302,19 @@ export default function WatchRoomPage() {
                 <Power className="w-7 h-7 text-cinema-error" />
               </div>
               <h3 className="font-display text-xl font-semibold text-cinema-text mb-2">End Session?</h3>
-              <p className="text-cinema-text-muted text-sm">
-                This will end the watch session for everyone. Your progress will be saved.
-              </p>
+              <p className="text-cinema-text-muted text-sm">This will end the watch session for everyone. Your progress will be saved.</p>
             </div>
             <div className="flex gap-3">
-              <Button variant="ghost" className="flex-1" onClick={() => setShowEndConfirm(false)}>
-                Cancel
-              </Button>
-              <Button variant="danger" className="flex-1" onClick={handleEndSession}>
-                End Session
-              </Button>
+              <Button variant="ghost" className="flex-1" onClick={() => setShowEndConfirm(false)}>Cancel</Button>
+              <Button variant="danger" className="flex-1" onClick={handleEndSession}>End Session</Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Invite friend modal */}
+      {/* ── Invite modal ── */}
       {showInviteModal && movie && (
-        <InviteFriendModal
-          roomId={roomId}
-          movieId={movieId}
-          movieTitle={movie.title}
-          onClose={() => setShowInviteModal(false)}
-        />
+        <InviteFriendModal roomId={roomId} movieId={movieId} movieTitle={movie.title} onClose={() => setShowInviteModal(false)} />
       )}
     </div>
   );

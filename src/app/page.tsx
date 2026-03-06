@@ -65,22 +65,22 @@ export default function HomePage() {
         </div>
 
         {/* CTA buttons */}
-        <div className="flex flex-col sm:flex-row gap-4 animate-slide-up" style={{ animationDelay: '0.4s' }}>
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-xs sm:max-w-none sm:w-auto animate-slide-up" style={{ animationDelay: '0.4s' }}>
           {isLoggedIn ? (
-            <Link href="/browse">
-              <Button size="lg" icon={<Popcorn className="w-5 h-5" />}>
+            <Link href="/browse" className="w-full sm:w-auto">
+              <Button size="lg" icon={<Popcorn className="w-5 h-5" />} className="w-full sm:w-auto">
                 Browse Movies
               </Button>
             </Link>
           ) : (
             <>
-              <Link href="/auth/signup">
-                <Button size="lg" icon={<Heart className="w-5 h-5" />}>
+              <Link href="/auth/signup" className="w-full sm:w-auto">
+                <Button size="lg" icon={<Heart className="w-5 h-5" />} className="w-full sm:w-auto">
                   Get Started
                 </Button>
               </Link>
-              <Link href="/auth/login">
-                <Button variant="secondary" size="lg">
+              <Link href="/auth/login" className="w-full sm:w-auto">
+                <Button variant="secondary" size="lg" className="w-full sm:w-auto">
                   Sign In
                 </Button>
               </Link>

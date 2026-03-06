@@ -13,17 +13,13 @@ interface ChatPanelProps {
   currentUserId: string;
   isOpen: boolean;
   onToggle: () => void;
+  hideSidebarToggle?: boolean;
 }
 
 const REACTIONS = ['❤️', '😂', '😮', '😢', '🔥', '👏'];
 
 export default function ChatPanel({
-  messages,
-  presence,
-  onSendMessage,
-  currentUserId,
-  isOpen,
-  onToggle,
+  messages, presence, onSendMessage, currentUserId, isOpen, onToggle, hideSidebarToggle = false,
 }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [showReactions, setShowReactions] = useState(false);
@@ -54,25 +50,23 @@ export default function ChatPanel({
   return (
     <div className="relative flex h-full">
 
-      {/* ── Arrow tab — always visible on the left edge of chat panel ── */}
-      <button
-        onClick={onToggle}
-        className={cn(
-          'absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 z-40',
-          'flex flex-col items-center justify-center gap-1',
-          'w-5 py-6 rounded-l-xl border-l border-t border-b transition-all duration-200',
-          isOpen
-            ? 'bg-cinema-surface border-cinema-border text-cinema-text-muted hover:text-cinema-accent hover:border-cinema-accent/40'
-            : 'bg-cinema-accent/90 border-cinema-accent text-cinema-bg hover:bg-cinema-accent'
-        )}
-        title={isOpen ? 'Hide chat' : 'Show chat'}
-      >
-        {isOpen ? (
-          <ChevronRight className="w-3.5 h-3.5" />
-        ) : (
-          <ChevronLeft className="w-3.5 h-3.5" />
-        )}
-      </button>
+      {/* ── Arrow tab — only in desktop sidebar mode ── */}
+      {!hideSidebarToggle && (
+        <button
+          onClick={onToggle}
+          className={cn(
+            'absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 z-40',
+            'flex flex-col items-center justify-center gap-1',
+            'w-5 py-6 rounded-l-xl border-l border-t border-b transition-all duration-200',
+            isOpen
+              ? 'bg-cinema-surface border-cinema-border text-cinema-text-muted hover:text-cinema-accent hover:border-cinema-accent/40'
+              : 'bg-cinema-accent/90 border-cinema-accent text-cinema-bg hover:bg-cinema-accent'
+          )}
+          title={isOpen ? 'Hide chat' : 'Show chat'}
+        >
+          {isOpen ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
+        </button>
+      )}
 
       {/* ── Chat panel ── */}
       <div className={cn(
