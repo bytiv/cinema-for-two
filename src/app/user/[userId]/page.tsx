@@ -7,15 +7,17 @@ import { Profile, Postcard } from '@/types';
 import Navbar from '@/components/layout/Navbar';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Film, Clock, Heart, User } from 'lucide-react';
+import { ArrowLeft, Film, Clock, Heart, User, Pencil, Save, X } from 'lucide-react';
 import { formatRelativeTime } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { useAdminMode } from '@/contexts/AdminModeContext';
 
 export default function UserProfilePage() {
   const params = useParams();
   const router = useRouter();
   const supabase = createClient();
   const profileUserId = params.userId as string;
+  const { adminMode } = useAdminMode();
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [postcards, setPostcards] = useState<Postcard[]>([]);
@@ -23,7 +25,16 @@ export default function UserProfilePage() {
   const [isFriend, setIsFriend] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [selectedPostcard, setSelectedPostcard] = useState<Postcard | null>(null);
+
+  // Admin edit state
+  const [showAdminEdit, setShowAdminEdit] = useState(false);
+  const [editFirst, setEditFirst] = useState('');
+  const [editLast, setEditLast] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [editStatus, setEditStatus] = useState<'pending' | 'approved' | 'denied'>('approved');
+  const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -40,29 +51,70 @@ export default function UserProfilePage() {
       return;
     }
 
-    const [profileRes, postcardsRes, moviesRes, friendshipRes] = await Promise.all([
+    const [profileRes, postcardsRes, moviesRes, myProfileRes] = await Promise.all([
       supabase.from('profiles').select('*').eq('user_id', profileUserId).single(),
       supabase.from('postcards').select('*').eq('user_id', profileUserId).order('position_index'),
       supabase.from('movies').select('id', { count: 'exact' }).eq('uploaded_by', profileUserId),
-      supabase.from('friendships')
-        .select('id, status')
-        .or(`and(requester_id.eq.${user.id},addressee_id.eq.${profileUserId}),and(requester_id.eq.${profileUserId},addressee_id.eq.${user.id})`)
-        .eq('status', 'accepted')
-        .maybeSingle(),
+      supabase.from('profiles').select('role').eq('user_id', user.id).single(),
     ]);
 
     if (!profileRes.data) { router.push('/friends'); return; }
 
+    const isAdmin = myProfileRes.data?.role === 'admin';
+
+    // Check friendship in both directions separately to avoid RLS issues with .or()
+    let isFriend = false;
+    if (!isAdmin) {
+      const [{ data: reqRow }, { data: addrRow }] = await Promise.all([
+        supabase.from('friendships').select('id').eq('requester_id', user.id).eq('addressee_id', profileUserId).eq('status', 'accepted').maybeSingle(),
+        supabase.from('friendships').select('id').eq('requester_id', profileUserId).eq('addressee_id', user.id).eq('status', 'accepted').maybeSingle(),
+      ]);
+      isFriend = !!(reqRow || addrRow);
+    }
+
+    if (!isAdmin && !isFriend) {
+      setAccessDenied(true);
+      setLoading(false);
+      return;
+    }
+
     setProfile(profileRes.data);
     setPostcards(postcardsRes.data || []);
     setMovieCount(moviesRes.count || 0);
-    setIsFriend(!!friendshipRes.data);
+    setIsFriend(isFriend);
     setLoading(false);
   }
 
-  function isOnline(lastSeen: string | null): boolean {
+  function openAdminEdit() {
+    if (!profile) return;
+    setEditFirst(profile.first_name);
+    setEditLast(profile.last_name);
+    setEditBio(profile.bio || '');
+    setEditStatus(profile.status);
+    setShowAdminEdit(true);
+  }
+
+  async function handleAdminSave() {
+    if (!profile) return;
+    setEditSaving(true);
+    const { error } = await supabase.from('profiles').update({
+      first_name: editFirst,
+      last_name: editLast,
+      bio: editBio.trim() || null,
+      status: editStatus,
+      updated_at: new Date().toISOString(),
+    }).eq('user_id', profileUserId);
+    if (!error) {
+      setProfile((p) => p ? { ...p, first_name: editFirst, last_name: editLast, bio: editBio.trim() || null, status: editStatus } : p);
+      setShowAdminEdit(false);
+    }
+    setEditSaving(false);
+  }
+
+  function isOnline(lastSeen: string | null, hideOnline?: boolean): boolean {
+    if (hideOnline) return false;
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 30 * 60 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 60 * 1000;
   }
 
   if (loading) {
@@ -78,9 +130,22 @@ export default function UserProfilePage() {
     );
   }
 
+  if (accessDenied) return (
+    <div className="min-h-screen"><Navbar />
+      <div className="pt-24 px-4 max-w-md mx-auto text-center">
+        <div className="w-16 h-16 rounded-2xl bg-cinema-card flex items-center justify-center mx-auto mb-4">
+          <User className="w-8 h-8 text-cinema-text-dim" />
+        </div>
+        <h2 className="font-display text-2xl font-bold text-cinema-text mb-2">Profile Private</h2>
+        <p className="text-cinema-text-muted mb-6">You need to be friends to view this profile.</p>
+        <Link href="/friends"><button className="px-5 py-2.5 rounded-xl bg-cinema-accent/15 text-cinema-accent border border-cinema-accent/30 text-sm font-medium hover:bg-cinema-accent/25 transition-colors">Go to Friends</button></Link>
+      </div>
+    </div>
+  );
+
   if (!profile) return null;
 
-  const online = isOnline(profile.last_seen_at);
+  const online = isOnline(profile.last_seen_at, profile.hide_online_status);
   const firstName = profile.first_name;
 
   return (
@@ -133,6 +198,14 @@ export default function UserProfilePage() {
                     <span className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-cinema-accent/15 text-cinema-accent border border-cinema-accent/20 font-medium">
                       <Heart className="w-3 h-3" fill="currentColor" /> Friends
                     </span>
+                  )}
+                  {adminMode && (
+                    <button
+                      onClick={openAdminEdit}
+                      className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-cinema-accent/10 text-cinema-accent border border-cinema-accent/20 hover:bg-cinema-accent/20 transition-colors font-medium"
+                    >
+                      <Pencil className="w-3 h-3" /> Edit Profile
+                    </button>
                   )}
                 </div>
 
@@ -193,8 +266,8 @@ export default function UserProfilePage() {
                     sizes="120px"
                   />
                   {pc.caption && (
-                    <div className="absolute bottom-0 left-0 right-0 bg-white/90 py-1 px-1.5 translate-y-full group-hover:translate-y-0 transition-transform duration-200">
-                      <p className="text-[8px] text-gray-600 text-center truncate">{pc.caption}</p>
+                    <div className="absolute bottom-0 left-0 right-0 bg-cinema-bg/80 py-1 px-1.5 translate-y-full group-hover:translate-y-0 transition-transform duration-200">
+                      <p className="text-[9px] text-cinema-text text-center truncate">{pc.caption}</p>
                     </div>
                   )}
                 </div>
@@ -215,6 +288,60 @@ export default function UserProfilePage() {
 
       </main>
 
+      {/* Admin edit panel */}
+      {showAdminEdit && adminMode && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowAdminEdit(false)}>
+          <div className="bg-cinema-card border border-cinema-accent/20 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-cinema-accent" /> Edit Profile
+                <span className="text-xs px-2 py-0.5 rounded-full bg-cinema-accent/15 text-cinema-accent border border-cinema-accent/20 font-normal">Admin</span>
+              </h3>
+              <button onClick={() => setShowAdminEdit(false)} className="text-cinema-text-dim hover:text-cinema-text transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-cinema-text-muted mb-1">First name</label>
+                <input value={editFirst} onChange={(e) => setEditFirst(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-cinema-surface border border-cinema-border text-cinema-text text-sm focus:outline-none focus:border-cinema-accent/50 transition-colors" />
+              </div>
+              <div>
+                <label className="block text-xs text-cinema-text-muted mb-1">Last name</label>
+                <input value={editLast} onChange={(e) => setEditLast(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-cinema-surface border border-cinema-border text-cinema-text text-sm focus:outline-none focus:border-cinema-accent/50 transition-colors" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-cinema-text-muted mb-1">Bio</label>
+              <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)} rows={3} maxLength={200}
+                className="w-full px-3 py-2 rounded-xl bg-cinema-surface border border-cinema-border text-cinema-text text-sm focus:outline-none focus:border-cinema-accent/50 transition-colors resize-none" />
+            </div>
+            <div>
+              <label className="block text-xs text-cinema-text-muted mb-1">Account status</label>
+              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as any)}
+                className="w-full px-3 py-2 rounded-xl bg-cinema-surface border border-cinema-border text-cinema-text text-sm focus:outline-none focus:border-cinema-accent/50 transition-colors">
+                <option value="approved">Approved</option>
+                <option value="pending">Pending</option>
+                <option value="denied">Denied</option>
+              </select>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setShowAdminEdit(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-cinema-surface border border-cinema-border text-cinema-text-muted hover:text-cinema-text transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleAdminSave} disabled={editSaving}
+                className="flex-1 px-4 py-2.5 rounded-xl text-sm font-medium bg-cinema-accent/15 text-cinema-accent border border-cinema-accent/30 hover:bg-cinema-accent/25 transition-colors flex items-center justify-center gap-2">
+                {editSaving ? <span className="w-4 h-4 border-2 border-cinema-accent/40 border-t-cinema-accent rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Postcard full-view modal */}
       {selectedPostcard && (
         <div
@@ -233,8 +360,8 @@ export default function UserProfilePage() {
                 />
               </div>
               {selectedPostcard.caption && (
-                <div className="bg-white py-3 px-4">
-                  <p className="text-sm text-gray-700 text-center">{selectedPostcard.caption}</p>
+                <div className="bg-cinema-bg py-3 px-4">
+                  <p className="text-sm text-cinema-text-muted text-center">{selectedPostcard.caption}</p>
                 </div>
               )}
             </div>

@@ -5,13 +5,16 @@ import { createClient } from '@/lib/supabase/client';
 import { Profile } from '@/types';
 import Navbar from '@/components/layout/Navbar';
 import Button from '@/components/ui/Button';
-import { CheckCircle, XCircle, Clock, Shield, Users } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Shield, Users, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
+import { useAdminMode } from '@/contexts/AdminModeContext';
 
 type FilterTab = 'pending' | 'approved' | 'denied' | 'all';
 
 export default function AdminPage() {
   const supabase = createClient();
+  const { adminMode, toggleAdminMode } = useAdminMode();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterTab>('pending');
@@ -65,14 +68,28 @@ export default function AdminPage() {
       <Navbar />
 
       <main className="relative z-10 pt-24 pb-12 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded-xl bg-cinema-accent/10 flex items-center justify-center">
-            <Shield className="w-5 h-5 text-cinema-accent" />
+        <div className="flex items-center justify-between gap-3 mb-8">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-cinema-accent/10 flex items-center justify-center">
+              <Shield className="w-5 h-5 text-cinema-accent" />
+            </div>
+            <div>
+              <h1 className="font-display text-3xl font-bold text-cinema-text">Admin Panel</h1>
+              <p className="text-cinema-text-muted text-sm">Manage user access requests</p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-display text-3xl font-bold text-cinema-text">Admin Panel</h1>
-            <p className="text-cinema-text-muted text-sm">Manage user access requests</p>
-          </div>
+          <button
+            onClick={toggleAdminMode}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all',
+              adminMode
+                ? 'bg-cinema-accent/15 text-cinema-accent border-cinema-accent/30 shadow-[0_0_20px_rgba(232,160,191,0.15)]'
+                : 'bg-cinema-card text-cinema-text-muted border-cinema-border hover:text-cinema-text'
+            )}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            {adminMode ? 'Admin Mode: ON' : 'Admin Mode: OFF'}
+          </button>
         </div>
 
         {/* Tabs */}
@@ -112,14 +129,14 @@ export default function AdminPage() {
                 key={profile.id}
                 className="flex items-center justify-between p-4 bg-cinema-card/50 border border-cinema-border rounded-2xl"
               >
-                <div className="flex items-center gap-4">
-                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center">
+                <Link href={`/user/${profile.user_id}`} className="flex items-center gap-4 flex-1 min-w-0 group">
+                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center flex-shrink-0">
                     <span className="text-sm font-bold text-cinema-bg">
                       {profile.first_name.charAt(0)}{profile.last_name.charAt(0)}
                     </span>
                   </div>
                   <div>
-                    <p className="font-medium text-cinema-text">
+                    <p className="font-medium text-cinema-text group-hover:text-cinema-accent transition-colors">
                       {profile.first_name} {profile.last_name}
                       {profile.role === 'admin' && (
                         <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-cinema-accent/20 text-cinema-accent">
@@ -131,7 +148,7 @@ export default function AdminPage() {
                       Joined {new Date(profile.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                </div>
+                </Link>
 
                 <div className="flex items-center gap-2">
                   {/* Status badge */}

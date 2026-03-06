@@ -6,9 +6,11 @@ import { createClient } from '@/lib/supabase/client';
 import Navbar from '@/components/layout/Navbar';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import { Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle, Subtitles, Plus, Globe } from 'lucide-react';
-import { formatFileSize, generateBlobName, getVideoMimeType } from '@/lib/utils';
+import { Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle, Plus, Globe, Gauge, Clock } from 'lucide-react';
+import { formatFileSize, generateBlobName, getVideoMimeType, formatDuration } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { VideoQuality } from '@/types';
+import DurationInput from '@/components/ui/DurationInput';
 
 const ACCEPTED_VIDEO = '.mp4,.mkv,.avi,.mov,.webm,.wmv,.m4v';
 const ACCEPTED_IMAGE = '.jpg,.jpeg,.png,.webp,.gif';
@@ -30,6 +32,13 @@ const LANGUAGE_OPTIONS = [
   { code: 'tr', label: 'Turkish' },
 ];
 
+const QUALITY_OPTIONS: { value: VideoQuality; label: string; desc: string }[] = [
+  { value: '480p',  label: '480p',  desc: 'SD' },
+  { value: '720p',  label: '720p',  desc: 'HD' },
+  { value: '1080p', label: '1080p', desc: 'Full HD' },
+  { value: '4K',    label: '4K',    desc: 'Ultra HD' },
+];
+
 interface SubtitleEntry {
   id: string;
   file: File;
@@ -46,12 +55,31 @@ export default function UploadPage() {
   const [posterPreview, setPosterPreview] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [quality, setQuality] = useState<VideoQuality | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [detectedDuration, setDetectedDuration] = useState<number | null>(null);
   const [subtitleEntries, setSubtitleEntries] = useState<SubtitleEntry[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStage, setUploadStage] = useState('');
   const [error, setError] = useState('');
   const [dragActive, setDragActive] = useState(false);
+
+  const detectDuration = useCallback((file: File) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      const secs = Math.round(video.duration);
+      if (isFinite(secs) && secs > 0) {
+        setDetectedDuration(secs);
+        setDuration(secs);
+      }
+      URL.revokeObjectURL(url);
+    };
+    video.onerror = () => URL.revokeObjectURL(url);
+    video.src = url;
+  }, []);
 
   const handleMovieDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -60,14 +88,16 @@ export default function UploadPage() {
     if (file && file.type.startsWith('video/')) {
       setMovieFile(file);
       if (!title) setTitle(file.name.replace(/\.[^/.]+$/, '').replace(/[_.-]/g, ' ').trim());
+      detectDuration(file);
     }
-  }, [title]);
+  }, [title, detectDuration]);
 
   const handleMovieSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setMovieFile(file);
       if (!title) setTitle(file.name.replace(/\.[^/.]+$/, '').replace(/[_.-]/g, ' ').trim());
+      detectDuration(file);
     }
   };
 
@@ -83,7 +113,6 @@ export default function UploadPage() {
   const handleSubtitleAdd = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     const newEntries: SubtitleEntry[] = files.map((file) => {
-      // Auto-detect language from filename e.g. movie.en.srt → en
       const parts = file.name.replace(/\.(srt|vtt)$/i, '').split('.');
       const lastPart = parts[parts.length - 1].toLowerCase();
       const detected = LANGUAGE_OPTIONS.find((l) => l.code === lastPart);
@@ -113,12 +142,11 @@ export default function UploadPage() {
     const text = await file.text();
     const vtt = 'WEBVTT\n\n' + text
       .replace(/\r\n/g, '\n')
-      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2'); // SRT uses comma, VTT uses dot
+      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
     return new Blob([vtt], { type: 'text/vtt' });
   };
 
   const uploadSubtitleFile = async (entry: SubtitleEntry, userId: string): Promise<{ label: string; lang: string; url: string }> => {
-    // Always upload as .vtt so the browser <track> element works natively
     const baseName = entry.file.name.replace(/\.(srt|vtt)$/i, '');
     const blobName = `${userId}/${Date.now()}-${baseName}.vtt`;
     const sasRes = await fetch('/api/upload/sas', {
@@ -128,11 +156,8 @@ export default function UploadPage() {
     });
     if (!sasRes.ok) throw new Error('Failed to get subtitle upload URL');
     const { uploadUrl, readUrl } = await sasRes.json();
-
-    // Convert SRT → VTT if needed
     const isSrt = entry.file.name.toLowerCase().endsWith('.srt');
     const body = isSrt ? await srtToVtt(entry.file) : entry.file;
-
     await fetch(uploadUrl, {
       method: 'PUT',
       headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'text/vtt' },
@@ -151,7 +176,6 @@ export default function UploadPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // Step 1: Movie SAS
       setUploadStage('Preparing upload...');
       const blobName = generateBlobName(user.id, movieFile.name);
       const sasRes = await fetch('/api/upload/sas', {
@@ -162,7 +186,6 @@ export default function UploadPage() {
       if (!sasRes.ok) throw new Error('Failed to get upload URL');
       const { uploadUrl } = await sasRes.json();
 
-      // Step 2: Upload movie
       setUploadStage('Uploading movie...');
       const xhr = new XMLHttpRequest();
       await new Promise<void>((resolve, reject) => {
@@ -179,7 +202,6 @@ export default function UploadPage() {
 
       setUploadProgress(82);
 
-      // Step 3: Upload poster
       let posterBlobName = null;
       if (posterFile) {
         setUploadStage('Uploading poster...');
@@ -198,16 +220,14 @@ export default function UploadPage() {
 
       setUploadProgress(87);
 
-      // Step 4: Upload subtitles
       let subtitleData: { label: string; lang: string; url: string }[] = [];
       if (subtitleEntries.length > 0) {
-        setUploadStage(`Uploading subtitles...`);
+        setUploadStage('Uploading subtitles...');
         subtitleData = await Promise.all(subtitleEntries.map((s) => uploadSubtitleFile(s, user.id)));
       }
 
       setUploadProgress(93);
 
-      // Step 5: Save to Supabase
       setUploadStage('Saving movie info...');
       const movieData = {
         title: title.trim(),
@@ -219,6 +239,8 @@ export default function UploadPage() {
           : null,
         file_size: movieFile.size,
         format: movieFile.name.split('.').pop()?.toLowerCase() || 'mp4',
+        quality: quality || null,
+        duration: duration || null,
         uploaded_by: user.id,
         subtitles: subtitleData,
       };
@@ -273,9 +295,17 @@ export default function UploadPage() {
                 </div>
                 <div className="text-left">
                   <p className="font-medium text-cinema-text">{movieFile.name}</p>
-                  <p className="text-sm text-cinema-text-muted">{formatFileSize(movieFile.size)}</p>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    <p className="text-sm text-cinema-text-muted">{formatFileSize(movieFile.size)}</p>
+                    {detectedDuration && (
+                      <p className="text-sm text-cinema-accent flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {formatDuration(detectedDuration)} detected
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); setMovieFile(null); }} className="ml-4 text-cinema-text-dim hover:text-cinema-error transition-colors">
+                <button onClick={(e) => { e.stopPropagation(); setMovieFile(null); setDuration(null); setDetectedDuration(null); }} className="ml-4 text-cinema-text-dim hover:text-cinema-error transition-colors">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -292,8 +322,9 @@ export default function UploadPage() {
           </div>
 
           {/* Movie details */}
-          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-4">
+          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-5">
             <Input id="title" label="Movie Title" placeholder="e.g. Our Favorite Movie" icon={<Film className="w-4 h-4" />} value={title} onChange={(e) => setTitle(e.target.value)} required />
+
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-cinema-text-muted">Description (optional)</label>
               <textarea
@@ -304,6 +335,40 @@ export default function UploadPage() {
                 className="w-full rounded-xl bg-cinema-card border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all resize-none"
               />
             </div>
+
+            {/* Quality selector */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                <Gauge className="w-4 h-4 text-cinema-accent" />
+                Video Quality
+                <span className="text-xs font-normal text-cinema-text-dim">(optional)</span>
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {QUALITY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setQuality(quality === opt.value ? null : opt.value)}
+                    className={cn(
+                      'flex flex-col items-center py-2.5 px-3 rounded-xl border text-xs font-medium transition-all duration-200',
+                      quality === opt.value
+                        ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent'
+                        : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-text'
+                    )}
+                  >
+                    <span className="text-sm font-bold">{opt.label}</span>
+                    <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Duration */}
+            <DurationInput
+              value={duration}
+              onChange={setDuration}
+              detected={detectedDuration}
+            />
 
             {/* Poster upload */}
             <div className="space-y-1.5">

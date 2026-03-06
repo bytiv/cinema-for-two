@@ -8,8 +8,25 @@ export interface Profile {
   status: 'pending' | 'approved' | 'denied';
   bio: string | null;
   last_seen_at: string | null;
+  hide_online_status: boolean;
+  postcards_disabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface PostcardShare {
+  id: string;
+  user_id: string;       // who is offering to share
+  friend_id: string;     // who they're sharing with
+  created_at: string;
+}
+
+export type VideoQuality = '480p' | '720p' | '1080p' | '4K';
+
+export interface SubtitleTrack {
+  label: string;
+  lang: string;
+  url: string;
 }
 
 export interface Movie {
@@ -22,6 +39,8 @@ export interface Movie {
   file_size: number;
   duration: number | null;
   format: string;
+  quality: VideoQuality | null;
+  subtitles: SubtitleTrack[];
   uploaded_by: string;
   created_at: string;
   updated_at: string;

@@ -170,9 +170,10 @@ export default function FriendsPage() {
     loadData();
   }
 
-  function isOnline(lastSeen: string | null): boolean {
+  function isOnline(lastSeen: string | null, hideOnline?: boolean): boolean {
+    if (hideOnline) return false;
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 30 * 60 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 60 * 1000;
   }
 
   async function handleAcceptInvite(inviteId: string, movieId: string, roomId: string) {
@@ -315,7 +316,7 @@ export default function FriendsPage() {
                 ) : (
                   friends.map((f) => {
                     const fp = f.friendProfile;
-                    const online = isOnline(fp.last_seen_at);
+                    const online = isOnline(fp.last_seen_at, fp.hide_online_status);
 
                     return (
                       <div key={f.id} className="bg-cinema-card/50 border border-cinema-border rounded-2xl">

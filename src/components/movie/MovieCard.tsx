@@ -1,8 +1,8 @@
 'use client';
 
 import { Movie } from '@/types';
-import { formatDuration, formatFileSize, formatRelativeTime } from '@/lib/utils';
-import { Play, Clock, HardDrive } from 'lucide-react';
+import { formatDuration, formatRelativeTime } from '@/lib/utils';
+import { Play, Clock } from 'lucide-react';
 import Link from 'next/link';
 import AzurePosterImage from './AzurePosterImage';
 
@@ -15,7 +15,7 @@ export default function MovieCard({ movie }: MovieCardProps) {
     <Link href={`/movie/${movie.id}`} className="group block">
       <div className="relative rounded-2xl overflow-hidden bg-cinema-card border border-cinema-border hover:border-cinema-accent/40 transition-all duration-500 hover:shadow-[0_0_40px_rgba(232,160,191,0.18)] hover:-translate-y-1.5">
 
-        {/* Poster — wide ratio, more width than height */}
+        {/* Poster */}
         <div className="relative aspect-[4/3] bg-cinema-surface overflow-hidden">
           {movie.poster_url ? (
             <AzurePosterImage
@@ -42,30 +42,24 @@ export default function MovieCard({ movie }: MovieCardProps) {
               <Play className="w-7 h-7 text-cinema-bg ml-0.5" fill="currentColor" />
             </div>
           </div>
-
-          {/* Duration badge */}
-          {movie.duration && (
-            <div className="absolute top-3 right-3 bg-cinema-bg/70 backdrop-blur-sm text-cinema-text text-xs px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium">
-              <Clock className="w-3.5 h-3.5" />
-              {formatDuration(movie.duration)}
-            </div>
-          )}
         </div>
 
-        {/* Info */}
-        <div className="p-5 space-y-2.5">
-          <h3 className="font-display text-xl font-semibold text-cinema-text truncate group-hover:text-cinema-accent transition-colors">
-            {movie.title}
-          </h3>
-          {movie.description && (
-            <p className="text-sm text-cinema-text-muted line-clamp-2 leading-relaxed">
-              {movie.description}
-            </p>
-          )}
-          <div className="flex items-center justify-between pt-1">
+        {/* Info — fixed height so all cards are the same size */}
+        <div className="p-5 h-[120px] flex flex-col justify-between">
+          <div>
+            <h3 className="font-display text-xl font-semibold text-cinema-text truncate group-hover:text-cinema-accent transition-colors">
+              {movie.title}
+            </h3>
+            {movie.description && (
+              <p className="text-sm text-cinema-text-dim line-clamp-1 mt-0.5">
+                {movie.description}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-sm text-cinema-text-dim">
-              <HardDrive className="w-3.5 h-3.5" />
-              {formatFileSize(movie.file_size)}
+              <Clock className="w-3.5 h-3.5" />
+              {movie.duration ? formatDuration(movie.duration) : '—'}
             </div>
             <div className="text-sm text-cinema-text-dim">
               {formatRelativeTime(movie.created_at)}

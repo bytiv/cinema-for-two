@@ -45,6 +45,15 @@ export default function WatchRoomPage() {
       supabase.from('profiles').select('*').eq('user_id', user.id).single(),
     ]);
 
+    // If joining a real room (not solo), register as a participant first.
+    // This is what grants stream access for non-friends joining via share link.
+    if (!isSolo && roomId) {
+      await supabase.from('watch_room_participants').upsert(
+        { room_id: roomId, user_id: user.id },
+        { onConflict: 'room_id,user_id', ignoreDuplicates: true }
+      );
+    }
+
     if (movieRes.data) {
       setMovie(movieRes.data);
       const res = await fetch(`/api/movies/stream?blobName=${encodeURIComponent(movieRes.data.blob_name)}`);

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Profile, Postcard, Movie, WatchHistory, Friendship } from '@/types';
+import { Profile, Postcard, Movie, WatchHistory, Friendship, PostcardShare } from '@/types';
 import Navbar from '@/components/layout/Navbar';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import PostcardModal from '@/components/postcards/PostcardModal';
 import Link from 'next/link';
 
-const MAX_POSTCARDS = 3;
+const MAX_POSTCARDS = 10;
 
 export default function ProfilePage() {
   const supabase = createClient();
@@ -31,6 +31,9 @@ export default function ProfilePage() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [bio, setBio] = useState('');
+  const [hideOnline, setHideOnline] = useState(false);
+  const [postcardsDisabled, setPostcardsDisabled] = useState(false);
+  const [shareSet, setShareSet] = useState<Set<string>>(new Set()); // friend user_ids I've opted in to share with
   const [saving, setSaving] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [postcardUploading, setPostcardUploading] = useState(false);
@@ -70,6 +73,8 @@ export default function ProfilePage() {
       setFirstName(profileRes.data.first_name);
       setLastName(profileRes.data.last_name);
       setBio(profileRes.data.bio || '');
+      setHideOnline(profileRes.data.hide_online_status ?? false);
+      setPostcardsDisabled(profileRes.data.postcards_disabled ?? false);
     }
     if (postcardsRes.data) setPostcards(postcardsRes.data);
     if (moviesRes.data) setMyMovies(moviesRes.data);
@@ -83,6 +88,13 @@ export default function ProfilePage() {
     const friendUserIds: string[] = [];
     if (asRequester) asRequester.forEach((f) => friendUserIds.push(f.addressee_id));
     if (asAddressee) asAddressee.forEach((f) => friendUserIds.push(f.requester_id));
+
+    // Load who I've already opted in to share postcards with
+    const { data: sharesData } = await supabase
+      .from('postcard_shares')
+      .select('friend_id')
+      .eq('user_id', user.id);
+    if (sharesData) setShareSet(new Set(sharesData.map((s) => s.friend_id)));
 
     if (friendUserIds.length > 0) {
       const { data: friendProfiles } = await supabase.from('profiles').select('*').in('user_id', friendUserIds);
@@ -113,11 +125,11 @@ export default function ProfilePage() {
     if (!userId) return;
     setSaving(true);
     const { error } = await supabase.from('profiles')
-      .update({ first_name: firstName, last_name: lastName, bio: bio.trim() || null, updated_at: new Date().toISOString() })
+      .update({ first_name: firstName, last_name: lastName, bio: bio.trim() || null, hide_online_status: hideOnline, postcards_disabled: postcardsDisabled, updated_at: new Date().toISOString() })
       .eq('user_id', userId);
     if (!error) {
       showSuccess('Profile updated!');
-      setProfile((prev) => prev ? { ...prev, first_name: firstName, last_name: lastName, bio: bio.trim() || null } : null);
+      setProfile((prev) => prev ? { ...prev, first_name: firstName, last_name: lastName, bio: bio.trim() || null, hide_online_status: hideOnline, postcards_disabled: postcardsDisabled } : null);
     }
     setSaving(false);
   }
@@ -188,6 +200,22 @@ export default function ProfilePage() {
   async function handleDeletePostcard(id: string) {
     await supabase.from('postcards').delete().eq('id', id);
     setPostcards((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  async function toggleShare(friendUserId: string) {
+    if (!userId) return;
+    const isSharing = shareSet.has(friendUserId);
+    if (isSharing) {
+      await supabase.from('postcard_shares').delete()
+        .eq('user_id', userId).eq('friend_id', friendUserId);
+      setShareSet((prev) => { const s = new Set(prev); s.delete(friendUserId); return s; });
+    } else {
+      await supabase.from('postcard_shares').upsert(
+        { user_id: userId, friend_id: friendUserId },
+        { onConflict: 'user_id,friend_id', ignoreDuplicates: true }
+      );
+      setShareSet((prev) => new Set([...prev, friendUserId]));
+    }
   }
 
   async function handleDeleteAccount() {
@@ -290,6 +318,27 @@ export default function ProfilePage() {
               <p className="text-xs text-cinema-text-dim text-right">{bio.length}/200</p>
             </div>
 
+            {/* Hide online status toggle */}
+            <div className="flex items-center justify-between gap-4 p-3 rounded-xl bg-cinema-card border border-cinema-border mb-4">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-cinema-text">Hide online status</p>
+                <p className="text-xs text-cinema-text-dim mt-0.5">Friends won't see when you're active</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHideOnline((v) => !v)}
+                className={cn(
+                  'relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200',
+                  hideOnline ? 'bg-cinema-accent' : 'bg-cinema-border'
+                )}
+              >
+                <span className={cn(
+                  'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                  hideOnline ? 'translate-x-[1.375rem]' : 'translate-x-1'
+                )} />
+              </button>
+            </div>
+
             <Button onClick={handleSaveProfile} loading={saving} icon={<Save className="w-4 h-4" />}>
               Save Changes
             </Button>
@@ -373,12 +422,37 @@ export default function ProfilePage() {
                 </h3>
                 <p className="text-sm text-cinema-text-muted mt-1">{postcards.length}/{MAX_POSTCARDS} — These float on the home page!</p>
               </div>
-              {postcards.length < MAX_POSTCARDS && (
+              {postcards.length < MAX_POSTCARDS && !postcardsDisabled && (
                 <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => setShowPostcardForm(!showPostcardForm)}>Add</Button>
               )}
             </div>
 
-            {showPostcardForm && (
+            {/* Global disable toggle */}
+            <div className="flex items-center justify-between gap-4 p-3 rounded-xl bg-cinema-surface border border-cinema-border mb-4">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-cinema-text">Disable postcards</p>
+                <p className="text-xs text-cinema-text-dim mt-0.5">Hides your postcards everywhere</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !postcardsDisabled;
+                  setPostcardsDisabled(next);
+                  if (userId) supabase.from('profiles').update({ postcards_disabled: next }).eq('user_id', userId).then(() => {});
+                }}
+                className={cn(
+                  'relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200',
+                  postcardsDisabled ? 'bg-cinema-accent' : 'bg-cinema-border'
+                )}
+              >
+                <span className={cn(
+                  'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                  postcardsDisabled ? 'translate-x-[1.375rem]' : 'translate-x-1'
+                )} />
+              </button>
+            </div>
+
+            {showPostcardForm && !postcardsDisabled && (
               <div className="mb-4 p-4 rounded-xl bg-cinema-surface border border-cinema-border space-y-3">
                 <Input id="caption" placeholder="Caption (optional)" value={postcardCaption} onChange={(e) => setPostcardCaption(e.target.value)} />
                 <label className="block">
@@ -390,13 +464,20 @@ export default function ProfilePage() {
               </div>
             )}
 
-            {postcards.length === 0 ? (
+            {postcardsDisabled ? (
+              <p className="text-cinema-text-dim text-sm py-4 text-center">Postcards are disabled and hidden everywhere.</p>
+            ) : postcards.length === 0 ? (
               <p className="text-cinema-text-dim text-sm py-4 text-center">No postcards yet. Add some cute photos that will float on the home page!</p>
             ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-5 gap-2">
                 {postcards.map((pc) => (
-                  <div key={pc.id} className="relative group rounded-lg overflow-hidden aspect-[3/4] bg-cinema-surface cursor-pointer" onClick={() => setSelectedPostcard(pc)}>
-                    <Image src={pc.image_url} alt={pc.caption || 'Postcard'} fill className="object-cover" sizes="120px" />
+                  <div key={pc.id} className="relative group rounded-xl overflow-hidden aspect-[3/4] bg-cinema-surface cursor-pointer" onClick={() => setSelectedPostcard(pc)}>
+                    <Image src={pc.image_url} alt={pc.caption || 'Postcard'} fill className="object-cover" sizes="80px" />
+                    {pc.caption && (
+                      <div className="absolute bottom-0 left-0 right-0 bg-cinema-bg/80 py-1 px-1.5 translate-y-full group-hover:translate-y-0 transition-transform duration-200">
+                        <p className="text-[9px] text-cinema-text text-center truncate">{pc.caption}</p>
+                      </div>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDeletePostcard(pc.id); }}
                       className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-cinema-error"
@@ -405,6 +486,46 @@ export default function ProfilePage() {
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Per-friend postcard sharing */}
+            {!postcardsDisabled && friends.length > 0 && (
+              <div className="mt-5 pt-5 border-t border-cinema-border/50">
+                <p className="text-sm font-medium text-cinema-text mb-1">Share postcards with friends</p>
+                <p className="text-xs text-cinema-text-dim mb-3">Mutual opt-in required — both of you must enable sharing for postcards to appear for each other.</p>
+                <div className="space-y-2">
+                  {friends.map((f) => {
+                    const fp = f.friendProfile;
+                    const sharing = shareSet.has(fp.user_id);
+                    return (
+                      <div key={fp.user_id} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-cinema-surface/60 border border-cinema-border/50">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center overflow-hidden flex-shrink-0">
+                            {fp.avatar_url ? (
+                              <Image src={fp.avatar_url} alt="" width={32} height={32} className="object-cover" />
+                            ) : (
+                              <span className="text-xs font-bold text-cinema-bg">{fp.first_name.charAt(0)}{fp.last_name.charAt(0)}</span>
+                            )}
+                          </div>
+                          <p className="text-sm text-cinema-text truncate">{fp.first_name} {fp.last_name}</p>
+                        </div>
+                        <button
+                          onClick={() => toggleShare(fp.user_id)}
+                          className={cn(
+                            'relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200',
+                            sharing ? 'bg-cinema-accent' : 'bg-cinema-border'
+                          )}
+                        >
+                          <span className={cn(
+                            'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                            sharing ? 'translate-x-[1.375rem]' : 'translate-x-1'
+                          )} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

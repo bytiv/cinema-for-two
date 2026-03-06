@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     // Find the movie by blobName to check ownership
     const { data: movie } = await supabase
       .from('movies')
-      .select('uploaded_by')
+      .select('id, uploaded_by')
       .eq('blob_name', blobName)
       .single();
 
@@ -32,20 +32,56 @@ export async function GET(request: Request) {
 
     // Allow if user is the uploader
     if (movie.uploaded_by !== user.id) {
-      // Check friendship in both directions
       const adminSupabase = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.SUPABASE_SERVICE_ROLE_KEY!,
         { auth: { autoRefreshToken: false, persistSession: false } }
       );
 
-      const [{ data: reqRow }, { data: addrRow }] = await Promise.all([
-        adminSupabase.from('friendships').select('id').eq('requester_id', user.id).eq('addressee_id', movie.uploaded_by).eq('status', 'accepted').maybeSingle(),
-        adminSupabase.from('friendships').select('id').eq('requester_id', movie.uploaded_by).eq('addressee_id', user.id).eq('status', 'accepted').maybeSingle(),
-      ]);
+      // Check admin role
+      const { data: profile } = await adminSupabase
+        .from('profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .single();
 
-      if (!reqRow && !addrRow) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      if (profile?.role !== 'admin') {
+        // Check friendship in both directions
+        const [{ data: reqRow }, { data: addrRow }] = await Promise.all([
+          adminSupabase.from('friendships').select('id').eq('requester_id', user.id).eq('addressee_id', movie.uploaded_by).eq('status', 'accepted').maybeSingle(),
+          adminSupabase.from('friendships').select('id').eq('requester_id', movie.uploaded_by).eq('addressee_id', user.id).eq('status', 'accepted').maybeSingle(),
+        ]);
+
+        // Check session-based invite access
+        const { data: inviteRow } = await adminSupabase
+          .from('watch_invites')
+          .select('id')
+          .eq('movie_id', movie.id)
+          .eq('to_user_id', user.id)
+          .eq('status', 'accepted')
+          .maybeSingle();
+
+        // Also allow if user is an active participant in any room for this movie
+        let participantRow = null;
+        const { data: activeRooms } = await adminSupabase
+          .from('watch_rooms')
+          .select('id')
+          .eq('movie_id', movie.id)
+          .eq('is_active', true);
+        if (activeRooms && activeRooms.length > 0) {
+          const roomIds = activeRooms.map((r) => r.id);
+          const { data: pRow } = await adminSupabase
+            .from('watch_room_participants')
+            .select('id')
+            .eq('user_id', user.id)
+            .in('room_id', roomIds)
+            .maybeSingle();
+          participantRow = pRow;
+        }
+
+        if (!reqRow && !addrRow && !inviteRow && !participantRow) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
       }
     }
 

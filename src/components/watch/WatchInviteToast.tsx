@@ -93,7 +93,15 @@ export default function WatchInviteToast() {
   }
 
   async function handleAccept(invite: Invite) {
-    await supabase.from('watch_invites').update({ status: 'accepted' }).eq('id', invite.id);
+    // Wait for DB to confirm before navigating so stream access check passes
+    const { error } = await supabase
+      .from('watch_invites')
+      .update({ status: 'accepted' })
+      .eq('id', invite.id);
+    if (error) {
+      console.error('Failed to accept invite', error);
+      return;
+    }
     dismissInvite(invite.id);
     router.push(`/watch/${invite.movie_id}/room/${invite.room_id}`);
   }
