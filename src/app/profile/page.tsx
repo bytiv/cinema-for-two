@@ -344,32 +344,6 @@ export default function ProfilePage() {
             </Button>
           </div>
 
-          {/* Change Password */}
-          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6">
-            <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2 mb-4">
-              <Lock className="w-5 h-5 text-cinema-secondary" />
-              Change Password
-            </h3>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div className="relative">
-                <Input id="newPassword" label="New Password" type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-                <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
-                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-              <div className="relative">
-                <Input id="confirmPassword" label="Confirm Password" type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
-                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-            {passwordError && <p className="text-sm text-cinema-error mb-3">{passwordError}</p>}
-            <Button onClick={handleChangePassword} loading={passwordSaving} variant="secondary" icon={<Lock className="w-4 h-4" />} disabled={!newPassword || !confirmPassword}>
-              Update Password
-            </Button>
-          </div>
-
           {/* Friends */}
           <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6">
             <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2 mb-4">
@@ -583,6 +557,33 @@ export default function ProfilePage() {
               </div>
             )}
           </div>
+
+          {/* Change Password */}
+          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6">
+            <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2 mb-4">
+              <Lock className="w-5 h-5 text-cinema-secondary" />
+              Change Password
+            </h3>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="relative">
+                <Input id="newPassword" label="New Password" type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
+                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <div className="relative">
+                <Input id="confirmPassword" label="Confirm Password" type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
+                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            {passwordError && <p className="text-sm text-cinema-error mb-3">{passwordError}</p>}
+            <Button onClick={handleChangePassword} loading={passwordSaving} variant="secondary" icon={<Lock className="w-4 h-4" />} disabled={!newPassword || !confirmPassword}>
+              Update Password
+            </Button>
+          </div>
+
 
           {/* Danger Zone */}
           <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-error/20 rounded-2xl p-6">
