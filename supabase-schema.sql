@@ -413,3 +413,30 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.watch_invites;
 --   WHERE user_id = 'YOUR_USER_ID_HERE';
 --
 -- ============================================
+
+----------- IVNITES FOR NON FRIENDS 
+ALTER TABLE watch_room_participants 
+ADD CONSTRAINT watch_room_participants_room_user_unique 
+UNIQUE (room_id, user_id);
+
+----------- active status
+ALTER TABLE public.profiles 
+ADD COLUMN IF NOT EXISTS hide_online_status BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Add postcards_disabled to profiles
+ALTER TABLE public.profiles
+ADD COLUMN IF NOT EXISTS postcards_disabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Create postcard_shares table
+CREATE TABLE IF NOT EXISTS public.postcard_shares (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES public.profiles(user_id) ON DELETE CASCADE,
+  friend_id UUID NOT NULL REFERENCES public.profiles(user_id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(user_id, friend_id)
+);
+ALTER TABLE public.postcard_shares ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own shares" ON public.postcard_shares
+  FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Users can see shares directed at them" ON public.postcard_shares
+  FOR SELECT USING (auth.uid() = friend_id);
