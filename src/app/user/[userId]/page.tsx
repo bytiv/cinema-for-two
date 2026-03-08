@@ -11,7 +11,7 @@ import { ArrowLeft, Film, Clock, Heart, User, Pencil, Save, X } from 'lucide-rea
 import { formatRelativeTime } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { useAdminMode } from '@/contexts/AdminModeContext';
-import PostcardModal from '@/components/postcards/PostcardModal';
+import PostcardViewer from '@/components/postcards/PostcardViewer';
 
 export default function UserProfilePage() {
   const params = useParams();
@@ -27,7 +27,7 @@ export default function UserProfilePage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState(false);
-  const [selectedPostcard, setSelectedPostcard] = useState<Postcard | null>(null);
+  const [selectedPostcardIndex, setSelectedPostcardIndex] = useState<number | null>(null);
 
   // Admin edit state
   const [showAdminEdit, setShowAdminEdit] = useState(false);
@@ -115,7 +115,7 @@ export default function UserProfilePage() {
   function isOnline(lastSeen: string | null, hideOnline?: boolean): boolean {
     if (hideOnline) return false;
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 60 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 90 * 1000;
   }
 
   if (loading) {
@@ -253,10 +253,10 @@ export default function UserProfilePage() {
               {firstName}'s Postcards
             </h2>
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-              {postcards.map((pc) => (
+              {postcards.map((pc, i) => (
                 <div
                   key={pc.id}
-                  onClick={() => setSelectedPostcard(pc)}
+                  onClick={() => setSelectedPostcardIndex(i)}
                   className="relative rounded-xl overflow-hidden aspect-[3/4] bg-cinema-surface cursor-pointer group transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-cinema-accent/20 hover:z-10"
                 >
                   <Image
@@ -343,10 +343,13 @@ export default function UserProfilePage() {
         </div>
       )}
 
-      {/* Postcard full-view modal */}
-           {selectedPostcard && (
-             <PostcardModal postcard={selectedPostcard} onClose={() => setSelectedPostcard(null)} />
-           )}
+      {selectedPostcardIndex !== null && (
+        <PostcardViewer
+          postcards={postcards}
+          initialIndex={selectedPostcardIndex}
+          onClose={() => setSelectedPostcardIndex(null)}
+        />
+      )}
     </div>
   );
 }

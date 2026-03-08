@@ -18,6 +18,8 @@ export default function Navbar() {
   const [showMenu, setShowMenu] = useState(false);
 
   useEffect(() => {
+    let heartbeatInterval: NodeJS.Timeout;
+
     async function getProfile() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
@@ -26,12 +28,30 @@ export default function Navbar() {
           .select('*')
           .eq('user_id', user.id)
           .single();
-        if (data) setProfile(data);
+        if (data) {
+          setProfile(data);
+          // Heartbeat — update last_seen_at every 30s unless user hides online status
+          const updateSeen = async () => {
+            const { data: latest } = await supabase
+              .from('profiles')
+              .select('hide_online_status')
+              .eq('user_id', user.id)
+              .single();
+            if (!latest?.hide_online_status) {
+              await supabase
+                .from('profiles')
+                .update({ last_seen_at: new Date().toISOString() })
+                .eq('user_id', user.id);
+            }
+          };
+          updateSeen();
+          heartbeatInterval = setInterval(updateSeen, 30_000);
+        }
       }
     }
     getProfile();
+    return () => { if (heartbeatInterval) clearInterval(heartbeatInterval); };
   }, []);
-
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     router.push('/');

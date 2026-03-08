@@ -30,7 +30,6 @@ body {
 }
 
 /* ─── Film grain ─────────────────────────────────────────────────────────── */
-/* z-index 1000 so it floats above everything including modals */
 .film-grain-overlay {
   position: fixed;
   inset: 0;
@@ -75,19 +74,37 @@ video::-webkit-media-controls { display: none !important; }
 ::-webkit-scrollbar-thumb { background: var(--cinema-accent); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #c47a9e; }
 
-/* ─── Postcard cards ─────────────────────────────────────────────────────── */
-.postcard-swim { position: absolute; cursor: pointer; will-change: transform; }
-.postcard-dim         { opacity: 0.52; filter: blur(0.3px); transition: opacity 0.4s, filter 0.4s; }
-.postcard-dim:hover   { opacity: 0.88; filter: blur(0px); }
-.postcard-bright      { opacity: 0.80; transition: opacity 0.4s; }
-.postcard-bright:hover{ opacity: 1.00; }
+/* ─── Floating postcards ─────────────────────────────────────────────────── */
+.postcard-float {
+  animation: postcardFloat var(--float-duration, 20s) ease-in-out infinite;
+  animation-delay: var(--float-delay, 0s);
+}
 
-/* ─── Trail canvas — z-index 1, above SpaceBackground(-1), below UI ──────── */
-#trail-canvas {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
+@keyframes postcardFloat {
+  0%, 100% {
+    transform: translate(0, 0) rotate(var(--rotate-start, -3deg));
+  }
+  25% {
+    transform: translate(var(--drift-x, 15px), var(--drift-y, -20px)) rotate(var(--rotate-mid, 2deg));
+  }
+  50% {
+    transform: translate(calc(var(--drift-x, 15px) * -0.5), calc(var(--drift-y, -20px) * 1.5)) rotate(var(--rotate-start, -3deg));
+  }
+  75% {
+    transform: translate(calc(var(--drift-x, 15px) * 0.8), var(--drift-y, -20px)) rotate(var(--rotate-end, 1deg));
+  }
+}
+
+/* ─── Soft focus ─────────────────────────────────────────────────────────── */
+.soft-focus {
+  filter: blur(0.5px);
+  opacity: 0.7;
+  transition: all 0.5s ease;
+}
+.soft-focus:hover {
+  filter: blur(0px);
+  opacity: 1;
+  transform: scale(1.05);
 }
 
 /* ─── Inputs ─────────────────────────────────────────────────────────────── */

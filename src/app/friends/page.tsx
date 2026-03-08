@@ -57,8 +57,6 @@ export default function FriendsPage() {
     if (!user) return;
     setUserId(user.id);
 
-    await supabase.from('profiles').update({ last_seen_at: new Date().toISOString() }).eq('user_id', user.id);
-
     const [{ data: asRequester }, { data: asAddressee }] = await Promise.all([
       supabase.from('friendships').select('id, requester_id, addressee_id, status, created_at, updated_at').eq('requester_id', user.id),
       supabase.from('friendships').select('id, requester_id, addressee_id, status, created_at, updated_at').eq('addressee_id', user.id),
@@ -173,7 +171,7 @@ export default function FriendsPage() {
   function isOnline(lastSeen: string | null, hideOnline?: boolean): boolean {
     if (hideOnline) return false;
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 60 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 90 * 1000;
   }
 
   async function handleAcceptInvite(inviteId: string, movieId: string, roomId: string) {
