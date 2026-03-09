@@ -11,6 +11,27 @@ interface SubtitleStyle {
   size: number; opacity: number; bg: 'black' | 'dark' | 'none';
   position: 'bottom' | 'top'; color: 'white' | 'yellow' | 'cyan';
 }
+
+const DEFAULT_SUB_STYLE: SubtitleStyle = { size: 24, opacity: 1, bg: 'dark', position: 'bottom', color: 'white' };
+
+function loadSubStyle(): SubtitleStyle {
+  try {
+    const raw = document.cookie.split('; ').find(r => r.startsWith('subStyle='));
+    if (raw) return { ...DEFAULT_SUB_STYLE, ...JSON.parse(decodeURIComponent(raw.split('=')[1])) };
+  } catch {}
+  return DEFAULT_SUB_STYLE;
+}
+
+function saveSubStyle(style: SubtitleStyle) {
+  const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
+  document.cookie = `subStyle=${encodeURIComponent(JSON.stringify(style))}; expires=${expires}; path=/; SameSite=Lax`;
+}
+
+interface SubtitleTrack { label: string; lang: string; url: string; }
+interface SubtitleStyle {
+  size: number; opacity: number; bg: 'black' | 'dark' | 'none';
+  position: 'bottom' | 'top'; color: 'white' | 'yellow' | 'cyan';
+}
 interface VideoPlayerProps {
   src: string;
   subtitles?: SubtitleTrack[];
@@ -60,9 +81,20 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [currentCue,       setCurrentCue]       = useState<string | null>(null);
   const [showSubMenu,      setShowSubMenu]      = useState(false);
   const [showSubSettings,  setShowSubSettings]  = useState(false);
-  const [subStyle, setSubStyle] = useState<SubtitleStyle>({ size: 20, opacity: 1, bg: 'dark', position: 'bottom', color: 'white' });
+  const [subStyle, setSubStyle] = useState<SubtitleStyle>(DEFAULT_SUB_STYLE);
 
-  // ── Smart preloader: fetches 2 min ahead, auto-recovers stalls ───────────
+  // Load saved subtitle prefs from cookie on mount
+  useEffect(() => {
+    setSubStyle(loadSubStyle());
+  }, []);
+
+  const updateSubStyle = useCallback((updater: (prev: SubtitleStyle) => SubtitleStyle) => {
+    setSubStyle(prev => {
+      const next = updater(prev);
+      saveSubStyle(next);
+      return next;
+    });
+  }, []);
   const preloader = useVideoPreloader({ videoRef, src, enabled: true });
 
   useEffect(() => {
@@ -384,17 +416,17 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
                     <p className="text-xs font-semibold text-cinema-text uppercase tracking-wider">Subtitle Style</p>
                     <div className="space-y-1.5">
                       <div className="flex justify-between"><span className="text-xs text-cinema-text-muted">Size</span><span className="text-xs text-cinema-accent font-mono">{subStyle.size}px</span></div>
-                      <input type="range" min="12" max="36" step="2" value={subStyle.size} onChange={(e) => setSubStyle(s => ({ ...s, size: +e.target.value }))} className="w-full accent-cinema-accent h-1.5" />
+                      <input type="range" min="18" max="42" step="2" value={subStyle.size} onChange={(e) => updateSubStyle(s => ({ ...s, size: +e.target.value }))} className="w-full accent-cinema-accent h-1.5" />
                     </div>
                     <div className="space-y-1.5">
                       <div className="flex justify-between"><span className="text-xs text-cinema-text-muted">Opacity</span><span className="text-xs text-cinema-accent font-mono">{Math.round(subStyle.opacity * 100)}%</span></div>
-                      <input type="range" min="0.2" max="1" step="0.05" value={subStyle.opacity} onChange={(e) => setSubStyle(s => ({ ...s, opacity: +e.target.value }))} className="w-full accent-cinema-accent h-1.5" />
+                      <input type="range" min="0.2" max="1" step="0.05" value={subStyle.opacity} onChange={(e) => updateSubStyle(s => ({ ...s, opacity: +e.target.value }))} className="w-full accent-cinema-accent h-1.5" />
                     </div>
                     <div className="space-y-1.5">
                       <span className="text-xs text-cinema-text-muted">Color</span>
                       <div className="flex gap-2 mt-1">
                         {(['white','yellow','cyan'] as const).map((c) => (
-                          <button key={c} onClick={() => setSubStyle(s => ({ ...s, color: c }))} className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all', subStyle.color === c ? 'border-cinema-accent scale-105' : 'border-cinema-border')} style={{ color: COLOR_MAP[c], background: 'rgba(255,255,255,0.05)' }}>{c.charAt(0).toUpperCase()+c.slice(1)}</button>
+                          <button key={c} onClick={() => updateSubStyle(s => ({ ...s, color: c }))} className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all', subStyle.color === c ? 'border-cinema-accent scale-105' : 'border-cinema-border')} style={{ color: COLOR_MAP[c], background: 'rgba(255,255,255,0.05)' }}>{c.charAt(0).toUpperCase()+c.slice(1)}</button>
                         ))}
                       </div>
                     </div>
@@ -402,7 +434,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
                       <span className="text-xs text-cinema-text-muted">Background</span>
                       <div className="flex gap-2 mt-1">
                         {(['black','dark','none'] as const).map((b) => (
-                          <button key={b} onClick={() => setSubStyle(s => ({ ...s, bg: b }))} className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all text-white', subStyle.bg === b ? 'border-cinema-accent scale-105' : 'border-cinema-border')} style={{ background: b === 'black' ? 'rgba(0,0,0,0.85)' : b === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.08)' }}>{b === 'black' ? 'Solid' : b === 'dark' ? 'Semi' : 'None'}</button>
+                          <button key={b} onClick={() => updateSubStyle(s => ({ ...s, bg: b }))} className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all text-white', subStyle.bg === b ? 'border-cinema-accent scale-105' : 'border-cinema-border')} style={{ background: b === 'black' ? 'rgba(0,0,0,0.85)' : b === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.08)' }}>{b === 'black' ? 'Solid' : b === 'dark' ? 'Semi' : 'None'}</button>
                         ))}
                       </div>
                     </div>
@@ -410,7 +442,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
                       <span className="text-xs text-cinema-text-muted">Position</span>
                       <div className="flex gap-2 mt-1">
                         {(['bottom','top'] as const).map((p) => (
-                          <button key={p} onClick={() => setSubStyle(s => ({ ...s, position: p }))} className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all text-cinema-text', subStyle.position === p ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent' : 'border-cinema-border bg-white/5')}>{p === 'bottom' ? '↓ Bottom' : '↑ Top'}</button>
+                          <button key={p} onClick={() => updateSubStyle(s => ({ ...s, position: p }))} className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all text-cinema-text', subStyle.position === p ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent' : 'border-cinema-border bg-white/5')}>{p === 'bottom' ? '↓ Bottom' : '↑ Top'}</button>
                         ))}
                       </div>
                     </div>
