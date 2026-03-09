@@ -85,10 +85,16 @@ export async function GET(request: Request) {
       }
     }
 
-    // Generate a streaming SAS URL (valid for 24 hours)
-    const url = generateReadSasUrl(CONTAINERS.movies, blobName, 24);
+    // Generate a streaming SAS URL (valid for 4 hours — short enough to stay fresh,
+    // long enough not to expire mid-movie)
+    const url = generateReadSasUrl(CONTAINERS.movies, blobName, 4);
 
-    return NextResponse.json({ url });
+    return NextResponse.json({ url }, {
+      headers: {
+        // Cache the SAS URL on the client for 30 minutes
+        'Cache-Control': 'private, max-age=1800',
+      },
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

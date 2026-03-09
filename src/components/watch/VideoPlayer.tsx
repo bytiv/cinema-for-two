@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipBack, SkipForward, Subtitles, Settings2 } from 'lucide-react';
 import { formatDuration } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { useVideoPreloader } from '@/hooks/useVideoPreloader';
 
 interface SubtitleTrack { label: string; lang: string; url: string; }
 interface SubtitleStyle {
@@ -22,11 +23,11 @@ interface VideoPlayerProps {
 const BG_MAP    = { black: 'rgba(0,0,0,0.85)', dark: 'rgba(0,0,0,0.45)', none: 'transparent' };
 const COLOR_MAP = { white: '#ffffff', yellow: '#fde68a', cyan: '#a5f3fc' };
 
-// ── webkit fullscreen helpers (required for iPhone) ───────────────────────
+
 function requestFullscreen(el: HTMLElement) {
   if (el.requestFullscreen)               return el.requestFullscreen();
   if ((el as any).webkitRequestFullscreen) return (el as any).webkitRequestFullscreen();
-  if ((el as any).webkitEnterFullscreen)   return (el as any).webkitEnterFullscreen(); // iOS video element
+  if ((el as any).webkitEnterFullscreen)   return (el as any).webkitEnterFullscreen();
 }
 function exitFullscreen() {
   if (document.exitFullscreen)               return document.exitFullscreen();
@@ -53,19 +54,21 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [showControls, setShowControls] = useState(true);
   const [buffered,     setBuffered]     = useState(0);
   const [isMobile,     setIsMobile]     = useState(false);
+  const [isWaiting,    setIsWaiting]    = useState(false);
 
-  // Subtitle state
   const [activeSubtitle,   setActiveSubtitle]   = useState<string | null>(subtitles.length > 0 ? subtitles[0].lang : null);
   const [currentCue,       setCurrentCue]       = useState<string | null>(null);
   const [showSubMenu,      setShowSubMenu]      = useState(false);
   const [showSubSettings,  setShowSubSettings]  = useState(false);
   const [subStyle, setSubStyle] = useState<SubtitleStyle>({ size: 20, opacity: 1, bg: 'dark', position: 'bottom', color: 'white' });
 
+  // ── Smart preloader: fetches 2 min ahead, auto-recovers stalls ───────────
+  const preloader = useVideoPreloader({ videoRef, src, enabled: true });
+
   useEffect(() => {
     setIsMobile(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
   }, []);
 
-  // ── Track fullscreen changes (including webkit events) ───────────────────
   useEffect(() => {
     const update = () => setIsFullscreen(!!getFullscreenElement());
     document.addEventListener('fullscreenchange', update);
@@ -76,7 +79,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
   }, []);
 
-  // ── Disable native captions ──────────────────────────────────────────────
   useEffect(() => {
     if (!videoRef.current) return;
     const sync = () => {
@@ -90,7 +92,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     return () => clearTimeout(t);
   }, [activeSubtitle]);
 
-  // ── Poll active cue ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!videoRef.current || !activeSubtitle) { setCurrentCue(null); return; }
     const update = () => {
@@ -108,7 +109,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     return () => clearInterval(interval);
   }, [activeSubtitle]);
 
-  // ── External sync ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!externalControl || !videoRef.current) return;
     isExternalRef.current = true;
@@ -120,6 +120,23 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     }
     setTimeout(() => { isExternalRef.current = false; }, 100);
   }, [externalControl]);
+
+  // ── Stall/waiting state ──────────────────────────────────────────────────
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onWaiting = () => setIsWaiting(true);
+    const onPlaying = () => setIsWaiting(false);
+    const onCanPlay = () => setIsWaiting(false);
+    video.addEventListener('waiting', onWaiting);
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('canplay', onCanPlay);
+    return () => {
+      video.removeEventListener('waiting', onWaiting);
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('canplay', onCanPlay);
+    };
+  }, []);
 
   const emitEvent = useCallback((type: 'play' | 'pause' | 'seek', timestamp: number) => {
     if (!isExternalRef.current && onPlaybackEvent) onPlaybackEvent({ type, timestamp });
@@ -161,7 +178,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   };
 
   const toggleFullscreen = () => {
-    // On iOS, must fullscreen the video element itself, not the container
     const target = isMobile && videoRef.current ? videoRef.current : containerRef.current!;
     if (!getFullscreenElement()) { requestFullscreen(target); }
     else { exitFullscreen(); }
@@ -173,12 +189,10 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     if (isPlaying) hideTimeoutRef.current = setTimeout(() => setShowControls(false), 3000);
   };
 
-  // ── Double-tap to seek on mobile ─────────────────────────────────────────
   const handleTap = (e: React.TouchEvent<HTMLDivElement>) => {
     const now = Date.now();
     const timeSinceLast = now - lastTapRef.current;
     if (timeSinceLast < 300 && timeSinceLast > 0) {
-      // Double tap
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const x = e.changedTouches[0].clientX - rect.left;
       skip(x < rect.width / 2 ? -10 : 10);
@@ -206,6 +220,15 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const subBottom = subStyle.position === 'bottom' ? (showControls ? '80px' : '20px') : undefined;
   const subTop    = subStyle.position === 'top' ? '20px' : undefined;
 
+  // Multi-range buffer segments
+  const bufferedSegments: Array<{ start: number; end: number }> = [];
+  if (videoRef.current && duration > 0) {
+    const b = videoRef.current.buffered;
+    for (let i = 0; i < b.length; i++) {
+      bufferedSegments.push({ start: b.start(i), end: b.end(i) });
+    }
+  }
+
   return (
     <div
       ref={containerRef}
@@ -220,6 +243,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         src={src}
         className="w-full h-full object-contain"
         onClick={isMobile ? undefined : togglePlay}
+        preload="auto"
         onTimeUpdate={() => { if (videoRef.current) setCurrentTime(videoRef.current.currentTime); }}
         onLoadedMetadata={() => {
           if (videoRef.current) {
@@ -240,6 +264,15 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         ))}
       </video>
 
+      {/* ── Buffering spinner ── */}
+      {(isWaiting || preloader.isRecovering) && isPlaying && (
+        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+          <div className="w-12 h-12 rounded-full border-2 border-cinema-accent/30 border-t-cinema-accent animate-spin" />
+        </div>
+      )}
+
+
+
       {/* ── Subtitles ── */}
       {activeSubtitle && currentCue && (
         <div
@@ -259,7 +292,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       )}
 
       {/* ── Center play button ── */}
-      {!isPlaying && (
+      {!isPlaying && !isWaiting && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer z-10" onClick={togglePlay}>
           <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-cinema-accent/90 flex items-center justify-center shadow-2xl">
             <Play className="w-6 h-6 sm:w-8 sm:h-8 text-cinema-bg ml-1" fill="currentColor" />
@@ -275,7 +308,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         )}
         style={{ padding: '0 12px 12px' }}
       >
-        {/* Progress bar — taller touch target on mobile */}
+        {/* Progress bar — multi-range buffered segments */}
         <div
           ref={progressRef}
           className="relative cursor-pointer mb-3 group/progress"
@@ -283,9 +316,20 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           onClick={handleSeek}
           onTouchStart={handleSeek}
         >
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full">
-            <div className="absolute inset-y-0 left-0 bg-white/20 rounded-full" style={{ width: `${duration ? (buffered/duration)*100 : 0}%` }} />
-            <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${duration ? (currentTime/duration)*100 : 0}%` }}>
+          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full overflow-hidden">
+            {/* All buffered ranges */}
+            {bufferedSegments.map((seg, i) => (
+              <div
+                key={i}
+                className="absolute inset-y-0 bg-white/25 rounded-full"
+                style={{
+                  left:  `${(seg.start / duration) * 100}%`,
+                  width: `${((seg.end - seg.start) / duration) * 100}%`,
+                }}
+              />
+            ))}
+            {/* Playhead */}
+            <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}>
               <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-cinema-accent shadow-lg" />
             </div>
           </div>
@@ -293,7 +337,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
 
         {/* Controls row */}
         <div className="flex items-center justify-between gap-2">
-          {/* Left */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button onClick={() => skip(-10)} className="text-white/70 hover:text-white transition-colors p-1">
               <SkipBack className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -307,7 +350,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
               <SkipForward className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
-            {/* Volume — hide on mobile (hardware buttons) */}
             {!isMobile && (
               <div className="flex items-center gap-2 ml-1">
                 <button onClick={toggleMute} className="text-white/70 hover:text-white transition-colors">
@@ -322,9 +364,9 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
             </span>
           </div>
 
-          {/* Right */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            {/* Subtitle picker */}
+
+
             {subtitles.length > 0 && (
               <div className="relative">
                 <button
@@ -346,7 +388,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
               </div>
             )}
 
-            {/* Sub style settings */}
             {subtitles.length > 0 && activeSubtitle && !isMobile && (
               <div className="relative">
                 <button
