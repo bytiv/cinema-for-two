@@ -220,14 +220,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const subBottom = subStyle.position === 'bottom' ? (showControls ? '80px' : '20px') : undefined;
   const subTop    = subStyle.position === 'top' ? '20px' : undefined;
 
-  // Multi-range buffer segments
-  const bufferedSegments: Array<{ start: number; end: number }> = [];
-  if (videoRef.current && duration > 0) {
-    const b = videoRef.current.buffered;
-    for (let i = 0; i < b.length; i++) {
-      bufferedSegments.push({ start: b.start(i), end: b.end(i) });
-    }
-  }
 
   return (
     <div
@@ -317,17 +309,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           onTouchStart={handleSeek}
         >
           <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full overflow-hidden">
-            {/* All buffered ranges */}
-            {bufferedSegments.map((seg, i) => (
-              <div
-                key={i}
-                className="absolute inset-y-0 bg-white/25 rounded-full"
-                style={{
-                  left:  `${(seg.start / duration) * 100}%`,
-                  width: `${((seg.end - seg.start) / duration) * 100}%`,
-                }}
-              />
-            ))}
+            {/* Single buffered bar */}
+            <div className="absolute inset-y-0 left-0 bg-white/25 rounded-full" style={{ width: `${duration ? (buffered / duration) * 100 : 0}%` }} />
             {/* Playhead */}
             <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}>
               <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-cinema-accent shadow-lg" />
