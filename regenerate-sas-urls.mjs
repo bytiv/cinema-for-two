@@ -42,13 +42,15 @@ const EXPIRES_HOURS = 8760;
 
 // ── Helpers ─────────────────────────────────────────────────
 
-function isBareUrl(url) {
-  return url && !url.includes('?sv=');
+function needsNewSas(url) {
+  // Regenerate ALL URLs — bare or old SAS tokens
+  return url && url.includes('blob.core.windows.net');
 }
 
 function extractContainerAndBlob(url) {
-  // https://<account>.blob.core.windows.net/<container>/<blob>
-  const match = url.match(/blob\.core\.windows\.net\/([^/]+)\/(.+)/);
+  // Strip query string first, then parse
+  const bare = url.split('?')[0];
+  const match = bare.match(/blob\.core\.windows\.net\/([^/]+)\/(.+)/);
   if (!match) return null;
   return { containerName: match[1], blobName: decodeURIComponent(match[2]) };
 }
@@ -76,7 +78,7 @@ async function fixProfiles() {
 
   let fixed = 0;
   for (const row of data) {
-    if (!isBareUrl(row.avatar_url)) continue;
+    if (!needsNewSas(row.avatar_url)) continue;
     const parts = extractContainerAndBlob(row.avatar_url);
     if (!parts) { console.warn(`⚠️  Skipping unparseable avatar: ${row.avatar_url}`); continue; }
 
@@ -104,7 +106,7 @@ async function fixPostcards() {
 
   let fixed = 0;
   for (const row of data) {
-    if (!isBareUrl(row.image_url)) continue;
+    if (!needsNewSas(row.image_url)) continue;
     const parts = extractContainerAndBlob(row.image_url);
     if (!parts) { console.warn(`⚠️  Skipping unparseable postcard: ${row.image_url}`); continue; }
 
@@ -124,19 +126,32 @@ async function fixPostcards() {
   console.log(`→ Postcards: ${fixed} image(s) fixed\n`);
 }
 
-// ── Movies (poster_url + subtitles JSON) ─────────────────────
+// ── Movies (blob_url + poster_url + subtitles JSON) ──────────
 
 async function fixMovies() {
-  const { data, error } = await supabase.from('movies').select('id, poster_url, subtitles');
+  const { data, error } = await supabase.from('movies').select('id, blob_url, poster_url, subtitles');
   if (error) { console.error('movies fetch error', error); return; }
 
-  let fixedPosters = 0, fixedSubs = 0;
+  let fixedBlobs = 0, fixedPosters = 0, fixedSubs = 0;
+
   for (const row of data) {
     const updates = {};
 
+    // blob_url (actual movie file)
+    if (row.blob_url && needsNewSas(row.blob_url)) {
+      const bare = row.blob_url.split('?')[0];
+      const parts = extractContainerAndBlob(bare);
+      if (parts) {
+        updates.blob_url = generateSasUrl(parts.containerName, parts.blobName);
+        fixedBlobs++;
+        console.log(`✅ movie    ${parts.blobName}`);
+      }
+    }
+
     // poster_url
-    if (row.poster_url && isBareUrl(row.poster_url)) {
-      const parts = extractContainerAndBlob(row.poster_url);
+    if (row.poster_url && needsNewSas(row.poster_url)) {
+      const bare = row.poster_url.split('?')[0];
+      const parts = extractContainerAndBlob(bare);
       if (parts) {
         updates.poster_url = generateSasUrl(parts.containerName, parts.blobName);
         fixedPosters++;
@@ -147,8 +162,9 @@ async function fixMovies() {
     // subtitles JSONB array
     const subs = Array.isArray(row.subtitles) ? row.subtitles : [];
     const newSubs = subs.map(sub => {
-      if (!sub.url || !isBareUrl(sub.url)) return sub;
-      const parts = extractContainerAndBlob(sub.url);
+      if (!sub.url || !needsNewSas(sub.url)) return sub;
+      const bare = sub.url.split('?')[0];
+      const parts = extractContainerAndBlob(bare);
       if (!parts) return sub;
       fixedSubs++;
       console.log(`✅ subtitle ${parts.blobName}`);
@@ -170,7 +186,7 @@ async function fixMovies() {
       console.error(`❌ Failed to update movie ${row.id}:`, updateError.message);
     }
   }
-  console.log(`→ Movies: ${fixedPosters} poster(s), ${fixedSubs} subtitle(s) fixed\n`);
+  console.log(`→ Movies: ${fixedBlobs} movie file(s), ${fixedPosters} poster(s), ${fixedSubs} subtitle(s) fixed\n`);
 }
 
 // ── Main ─────────────────────────────────────────────────────
