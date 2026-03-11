@@ -11,7 +11,7 @@ import AzurePosterImage from '@/components/movie/AzurePosterImage';
 import { User, Camera, Save, Plus, X, Film, Image as ImageIcon, History, Users, Lock, Eye, EyeOff, Trash2 } from 'lucide-react';
 import { formatRelativeTime, formatFileSize, generateBlobName } from '@/lib/utils';
 import { cn } from '@/lib/utils';
-import PostcardViewer from '@/components/postcards/PostcardViewer';
+import PostcardModal from '@/components/postcards/PostcardModal';
 import Link from 'next/link';
 
 const MAX_POSTCARDS = 10;
@@ -25,7 +25,7 @@ export default function ProfilePage() {
   const [watchHistory, setWatchHistory] = useState<WatchHistory[]>([]);
   const [friends, setFriends] = useState<(Friendship & { friendProfile: Profile })[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedPostcardIndex, setSelectedPostcardIndex] = useState<number | null>(null);
+  const [selectedPostcard, setSelectedPostcard] = useState<Postcard | null>(null);
 
   // Edit states
   const [firstName, setFirstName] = useState('');
@@ -116,10 +116,9 @@ export default function ProfilePage() {
     setLoading(false);
   }
 
-  function isOnline(lastSeen: string | null, hideOnline?: boolean): boolean {
-    if (hideOnline) return false;
+  function isOnline(lastSeen: string | null): boolean {
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 90 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 30 * 60 * 1000;
   }
 
   async function handleSaveProfile() {
@@ -345,32 +344,6 @@ export default function ProfilePage() {
             </Button>
           </div>
 
-          {/* Change Password */}
-          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6">
-            <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2 mb-4">
-              <Lock className="w-5 h-5 text-cinema-secondary" />
-              Change Password
-            </h3>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div className="relative">
-                <Input id="newPassword" label="New Password" type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-                <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
-                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-              <div className="relative">
-                <Input id="confirmPassword" label="Confirm Password" type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
-                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-            {passwordError && <p className="text-sm text-cinema-error mb-3">{passwordError}</p>}
-            <Button onClick={handleChangePassword} loading={passwordSaving} variant="secondary" icon={<Lock className="w-4 h-4" />} disabled={!newPassword || !confirmPassword}>
-              Update Password
-            </Button>
-          </div>
-
           {/* Friends */}
           <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6">
             <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2 mb-4">
@@ -387,7 +360,7 @@ export default function ProfilePage() {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {friends.map((f) => {
                   const fp = f.friendProfile;
-                  const online = isOnline(fp.last_seen_at, fp.hide_online_status);
+                  const online = isOnline(fp.last_seen_at);
                   return (
                     <Link key={f.id} href={`/user/${fp.user_id}`} className="flex items-center gap-3 p-3 rounded-xl bg-cinema-surface/60 border border-cinema-border/50 hover:border-cinema-accent/30 hover:bg-cinema-surface transition-all">
                       <div className="relative flex-shrink-0">
@@ -471,8 +444,8 @@ export default function ProfilePage() {
               <p className="text-cinema-text-dim text-sm py-4 text-center">No postcards yet. Add some cute photos that will float on the home page!</p>
             ) : (
               <div className="grid grid-cols-5 gap-2">
-                {postcards.map((pc, i) => (
-                  <div key={pc.id} className="relative group rounded-xl overflow-hidden aspect-[3/4] bg-cinema-surface cursor-pointer" onClick={() => setSelectedPostcardIndex(i)}>
+                {postcards.map((pc) => (
+                  <div key={pc.id} className="relative group rounded-xl overflow-hidden aspect-[3/4] bg-cinema-surface cursor-pointer" onClick={() => setSelectedPostcard(pc)}>
                     <Image src={pc.image_url} alt={pc.caption || 'Postcard'} fill className="object-cover" sizes="80px" />
                     {pc.caption && (
                       <div className="absolute bottom-0 left-0 right-0 bg-cinema-bg/80 py-1 px-1.5 translate-y-full group-hover:translate-y-0 transition-transform duration-200">
@@ -585,6 +558,33 @@ export default function ProfilePage() {
             )}
           </div>
 
+          {/* Change Password */}
+          <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6">
+            <h3 className="font-display text-lg font-semibold text-cinema-text flex items-center gap-2 mb-4">
+              <Lock className="w-5 h-5 text-cinema-secondary" />
+              Change Password
+            </h3>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="relative">
+                <Input id="newPassword" label="New Password" type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
+                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <div className="relative">
+                <Input id="confirmPassword" label="Confirm Password" type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-9 text-cinema-text-dim hover:text-cinema-text transition-colors">
+                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            {passwordError && <p className="text-sm text-cinema-error mb-3">{passwordError}</p>}
+            <Button onClick={handleChangePassword} loading={passwordSaving} variant="secondary" icon={<Lock className="w-4 h-4" />} disabled={!newPassword || !confirmPassword}>
+              Update Password
+            </Button>
+          </div>
+
+
           {/* Danger Zone */}
           <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-error/20 rounded-2xl p-6">
             <h3 className="font-display text-lg font-semibold text-cinema-error flex items-center gap-2 mb-1">
@@ -638,12 +638,8 @@ export default function ProfilePage() {
         </div>
       </main>
 
-      {selectedPostcardIndex !== null && (
-        <PostcardViewer
-          postcards={postcards}
-          initialIndex={selectedPostcardIndex}
-          onClose={() => setSelectedPostcardIndex(null)}
-        />
+      {selectedPostcard && (
+        <PostcardModal postcard={selectedPostcard} onClose={() => setSelectedPostcard(null)} />
       )}
     </div>
   );
