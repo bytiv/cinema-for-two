@@ -12,7 +12,6 @@
  *   title        string   — movie title (required for auto-save)
  *   description? string
  *   quality?     string
- *   duration?    string   — seconds as string
  *   posterUrl?   string
  *
  * The API key to the Python service never leaves the server.
@@ -59,9 +58,7 @@ export async function GET(req: Request, { params }: Params) {
   const posterUrl   = url.searchParams.get('posterUrl')   ?? undefined;
   const quality     = (url.searchParams.get('quality') ?? undefined) as
     '480p' | '720p' | '1080p' | '4K' | undefined;
-  const duration    = url.searchParams.get('duration')
-    ? Number(url.searchParams.get('duration'))
-    : undefined;
+
 
   // ── Connect to Python SSE stream ─────────────────────────────────────────────
   let upstreamRes: Response;
@@ -161,7 +158,7 @@ export async function GET(req: Request, { params }: Params) {
                   description,
                   posterUrl,
                   quality,
-                  duration,
+                  // subtitles uploaded separately after movie is saved
                 });
 
                 // Enrich the forwarded event with the new movie_id

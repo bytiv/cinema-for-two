@@ -33,7 +33,7 @@ export async function POST(request: Request) {
 
     // ── Validate body ────────────────────────────────────────────────────────
     const body = await request.json();
-    const { hash, name, title, description, quality, duration, posterUrl, trackers } = body;
+    const { hash, name, title, description, quality, posterUrl, trackers } = body;
 
     if (!hash?.trim()) {
       return NextResponse.json({ error: 'hash is required' }, { status: 400 });
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
       jobId: job_id,
       stage,
       // Echo back so client can pass to stream subscription
-      meta: { title, description, quality, duration, posterUrl },
+      meta: { title, description, quality, posterUrl },
     });
 
   } catch (err: any) {

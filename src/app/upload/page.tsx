@@ -14,8 +14,8 @@ import DurationInput from '@/components/ui/DurationInput';
 import {
   Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle,
   Plus, Globe, Gauge, Clock, Hash, Magnet, ChevronDown, ChevronUp,
-  Download, HardDrive, Users, Zap, Ban, RefreshCw, Loader2,
-  ArrowRight, AlertTriangle, Wifi, WifiOff, FolderOpen,
+  Download, HardDrive, Users, Zap, Ban, Loader2,
+  ArrowRight, AlertTriangle, FolderOpen,
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ interface ActiveJob {
   title:       string;
   hash:        string;
   job:         TorrentJob | null;
-  streamMeta:  { description?: string; quality?: string; duration?: number; posterUrl?: string };
+  streamMeta:  { description?: string; quality?: string; posterUrl?: string; subtitles?: SubtitleEntry[] };
   startedAt:   number;
   movieId?:    string;
 }
@@ -96,7 +96,6 @@ function buildStreamUrl(jobId: string, meta: ActiveJob['streamMeta'] & { title: 
   const p = new URLSearchParams({ title: meta.title });
   if (meta.description) p.set('description', meta.description);
   if (meta.quality)     p.set('quality',     meta.quality);
-  if (meta.duration)    p.set('duration',    String(meta.duration));
   if (meta.posterUrl)   p.set('posterUrl',   meta.posterUrl);
   return `/api/ingest/${jobId}/stream?${p.toString()}`;
 }
@@ -268,9 +267,7 @@ export default function UploadPage() {
   const [torrentTitle,     setTorrentTitle]     = useState('');
   const [torrentDesc,      setTorrentDesc]      = useState('');
   const [torrentQuality,   setTorrentQuality]   = useState<VideoQuality | null>(null);
-  const [torrentDuration,  setTorrentDuration]  = useState<number | null>(null);
-  const [showTrackers,     setShowTrackers]     = useState(false);
-  const [extraTrackers,    setExtraTrackers]    = useState('');
+  const [torrentSubtitles, setTorrentSubtitles] = useState<SubtitleEntry[]>([]);
   const [torrentError,     setTorrentError]     = useState('');
   const [submitting,       setSubmitting]       = useState(false);
 
@@ -367,12 +364,6 @@ export default function UploadPage() {
     setTorrentError('');
 
     try {
-      const trackers = extraTrackers
-        .split('\n')
-        .map((t) => t.trim())
-        .filter(Boolean);
-
-      // Derive a clean filename from the title
       const name = torrentTitle.trim()
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
@@ -387,8 +378,6 @@ export default function UploadPage() {
           title:       torrentTitle.trim(),
           description: torrentDesc.trim() || undefined,
           quality:     torrentQuality ?? undefined,
-          duration:    torrentDuration ?? undefined,
-          trackers:    trackers.length ? trackers : undefined,
         }),
       });
 
@@ -398,28 +387,25 @@ export default function UploadPage() {
       }
 
       const { jobId, meta } = await res.json();
+      const streamMeta = { ...meta, subtitles: torrentSubtitles };
 
       const newJob: ActiveJob = {
         jobId,
         title:      torrentTitle.trim(),
         hash:       hashInput.trim(),
         job:        null,
-        streamMeta: meta,
+        streamMeta,
         startedAt:  Date.now(),
       };
 
       setActiveJobs((prev) => [newJob, ...prev]);
-      _attachStream(jobId, torrentTitle.trim(), meta);
+      _attachStream(jobId, torrentTitle.trim(), streamMeta);
 
-      // Reset form
       setHashInput('');
       setTorrentTitle('');
       setTorrentDesc('');
       setTorrentQuality(null);
-      setTorrentDuration(null);
-      setExtraTrackers('');
-
-      // Switch to jobs tab
+      setTorrentSubtitles([]);
       setTab('jobs');
 
     } catch (err: any) {
@@ -502,9 +488,9 @@ export default function UploadPage() {
     e.target.value = '';
   };
 
-  const updateSubtitleLang = (id: string, lang: string) => {
+  const updateSubtitleLang = (id: string, lang: string, setter = setSubtitleEntries) => {
     const opt = LANGUAGE_OPTIONS.find((l) => l.code === lang);
-    setSubtitleEntries((prev) => prev.map((s) => s.id === id ? { ...s, lang, label: opt?.label || lang } : s));
+    setter((prev) => prev.map((s) => s.id === id ? { ...s, lang, label: opt?.label || lang } : s));
   };
 
   const srtToVtt = async (file: File): Promise<Blob> => {
@@ -879,31 +865,51 @@ export default function UploadPage() {
                 </div>
               </div>
 
-              <DurationInput value={torrentDuration} onChange={setTorrentDuration} detected={null} />
+            </div>
 
-              {/* Extra trackers (collapsible) */}
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowTrackers((p) => !p)}
-                  className="flex items-center gap-2 text-sm text-cinema-text-dim hover:text-cinema-text-muted transition-colors"
-                >
-                  {showTrackers ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  Extra trackers (advanced)
-                </button>
-                {showTrackers && (
-                  <div className="mt-3 space-y-1.5">
-                    <p className="text-xs text-cinema-text-dim">One tracker URL per line. Leave empty to use the built-in trackers.</p>
-                    <textarea
-                      placeholder={"udp://tracker.example.com:1337/announce\nudp://another.tracker.org:6969/announce"}
-                      value={extraTrackers}
-                      onChange={(e) => setExtraTrackers(e.target.value)}
-                      rows={3}
-                      className="w-full rounded-xl bg-cinema-card border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all resize-none font-mono text-xs"
-                    />
-                  </div>
-                )}
+            {/* Subtitles */}
+            <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-display text-base font-semibold text-cinema-text flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-cinema-secondary" /> Subtitles <span className="text-xs font-normal text-cinema-text-dim">(optional)</span>
+                  </h3>
+                  <p className="text-xs text-cinema-text-dim mt-0.5">Upload .srt or .vtt files — added after download completes</p>
+                </div>
+                <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cinema-secondary/15 text-cinema-secondary hover:bg-cinema-secondary/25 border border-cinema-secondary/20 transition-colors cursor-pointer">
+                  <Plus className="w-3.5 h-3.5" /> Add subtitles
+                  <input type="file" accept={ACCEPTED_SUBTITLE} multiple onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    const newEntries: SubtitleEntry[] = files.map((file) => {
+                      const parts = file.name.replace(/\.(srt|vtt)$/i, '').split('.');
+                      const lastPart = parts[parts.length - 1].toLowerCase();
+                      const detected = LANGUAGE_OPTIONS.find((l) => l.code === lastPart);
+                      return { id: Math.random().toString(36).slice(2), file, lang: detected?.code || 'en', label: detected?.label || 'English' };
+                    });
+                    setTorrentSubtitles((prev) => [...prev, ...newEntries]);
+                    e.target.value = '';
+                  }} className="hidden" />
+                </label>
               </div>
+              {torrentSubtitles.length === 0 ? (
+                <div className="border-2 border-dashed border-cinema-border rounded-xl p-6 text-center">
+                  <Globe className="w-8 h-8 text-cinema-text-dim mx-auto mb-2 opacity-40" />
+                  <p className="text-sm text-cinema-text-dim">No subtitles added</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {torrentSubtitles.map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
+                      <div className="w-8 h-8 rounded-lg bg-cinema-secondary/10 flex items-center justify-center flex-shrink-0"><Globe className="w-4 h-4 text-cinema-secondary" /></div>
+                      <div className="flex-1 min-w-0"><p className="text-sm font-medium text-cinema-text truncate">{entry.file.name}</p></div>
+                      <select value={entry.lang} onChange={(e) => updateSubtitleLang(entry.id, e.target.value, setTorrentSubtitles)} className="text-xs rounded-lg bg-cinema-card border border-cinema-border px-2 py-1.5 text-cinema-text focus:outline-none cursor-pointer">
+                        {LANGUAGE_OPTIONS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+                      </select>
+                      <button onClick={() => setTorrentSubtitles((p) => p.filter((s) => s.id !== entry.id))} className="text-cinema-text-dim hover:text-cinema-error transition-colors"><X className="w-4 h-4" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Info callout */}

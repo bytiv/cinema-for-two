@@ -19,7 +19,7 @@ export interface SaveIngestMovieParams {
   description?: string;
   posterUrl?:  string;
   quality?:    '480p' | '720p' | '1080p' | '4K' | null;
-  duration?:   number | null;
+  subtitles?:  { label: string; lang: string; url: string }[];
 }
 
 export interface SaveIngestMovieResult {
@@ -27,10 +27,20 @@ export interface SaveIngestMovieResult {
   blobUrl: string;
 }
 
+async function probeBlobMeta(blobUrl: string): Promise<{ fileSize: number }> {
+  try {
+    const res = await fetch(blobUrl, { method: 'HEAD' });
+    const fileSize = parseInt(res.headers.get('content-length') ?? '0', 10);
+    return { fileSize: isNaN(fileSize) ? 0 : fileSize };
+  } catch {
+    return { fileSize: 0 };
+  }
+}
+
 export async function saveIngestMovie(
   params: SaveIngestMovieParams,
 ): Promise<SaveIngestMovieResult> {
-  const { job, userId, title, description, posterUrl, quality, duration } = params;
+  const { job, userId, title, description, posterUrl, quality, subtitles } = params;
 
   if (!job.blob_url) {
     throw new Error('Job is Ready but has no blob_url — cannot save movie');
@@ -39,14 +49,16 @@ export async function saveIngestMovie(
   const supabase = createServiceRoleClient();
 
   // ── 1. Derive blob_name from blob_url ─────────────────────────────────────
-  // blob_url is  https://<account>.blob.core.windows.net/<container>/<blob_name>
   const blobName = job.blob_url.split('/').slice(-1)[0];
 
   // ── 2. Derive format from file extension ──────────────────────────────────
   const ext    = blobName.split('.').pop()?.toLowerCase() ?? 'mp4';
   const format = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(ext) ? ext : 'mp4';
 
-  // ── 3. Insert movie row ───────────────────────────────────────────────────
+  // ── 3. Probe blob for file size (HEAD request — fast) ─────────────────────
+  const { fileSize } = await probeBlobMeta(job.blob_url);
+
+  // ── 4. Insert movie row ───────────────────────────────────────────────────
   const { data: movie, error: movieError } = await supabase
     .from('movies')
     .insert({
@@ -55,11 +67,11 @@ export async function saveIngestMovie(
       blob_url:      job.blob_url,
       blob_name:     blobName,
       poster_url:    posterUrl ?? null,
-      file_size:     0,          // unknown at ingest time — can be patched later
+      file_size:     fileSize,
       format,
       quality:       quality ?? null,
-      duration:      duration   ?? null,
-      subtitles:     [],
+      duration:      null,       // cannot be determined server-side without ffprobe
+      subtitles:     subtitles ?? [],
       ingest_method: 'torrent',
       info_hash:     job.info_hash,
       ingest_job_id: job.job_id,

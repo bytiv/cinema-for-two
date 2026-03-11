@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import PostcardModal from '@/components/postcards/PostcardModal';
 import Link from 'next/link';
 
-const MAX_POSTCARDS = 10;
+const MAX_POSTCARDS = 5;
 
 export default function ProfilePage() {
   const supabase = createClient();
