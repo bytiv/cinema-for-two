@@ -118,7 +118,7 @@ export default function ProfilePage() {
 
   function isOnline(lastSeen: string | null): boolean {
     if (!lastSeen) return false;
-    return Date.now() - new Date(lastSeen).getTime() < 30 * 60 * 1000;
+    return Date.now() - new Date(lastSeen).getTime() < 1 * 60 * 1000;
   }
 
   async function handleSaveProfile() {
