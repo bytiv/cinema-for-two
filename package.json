@@ -9,9 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@azure/storage-blob": "^12.17.0",
+    "@azure/storage-blob": "^12.31.0",
     "@supabase/ssr": "^0.1.0",
-    "@supabase/supabase-js": "^2.39.0",
+    "@supabase/supabase-js": "^2.99.1",
     "clsx": "^2.1.1",
     "framer-motion": "^10.18.0",
     "lucide-react": "^0.303.0",
