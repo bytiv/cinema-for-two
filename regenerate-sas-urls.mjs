@@ -61,9 +61,10 @@ function generateSasUrl(containerName, blobName) {
       containerName,
       blobName,
       permissions: BlobSASPermissions.parse('r'),
-      startsOn:  new Date(Date.now() - 5 * 60 * 1000),
+      startsOn:  new Date(Date.now() - 10 * 60 * 1000),
       expiresOn: new Date(Date.now() + EXPIRES_HOURS * 60 * 60 * 1000),
       protocol:  SASProtocol.Https,
+      version:   '2021-12-02',
     },
     credential
   ).toString();

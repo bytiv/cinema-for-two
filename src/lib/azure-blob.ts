@@ -29,6 +29,10 @@ export async function ensureContainers() {
   }
 }
 
+// Stable SAS API version — avoids 403s from newer sv= values not yet
+// fully supported by all Azure storage account configurations.
+const SAS_VERSION = '2021-12-02';
+
 // Generate a SAS URL for reading a blob (expires in 24 hours)
 export function generateReadSasUrl(containerName: string, blobName: string, expiresInHours = 24): string {
   const sasToken = generateBlobSASQueryParameters(
@@ -36,9 +40,11 @@ export function generateReadSasUrl(containerName: string, blobName: string, expi
       containerName,
       blobName,
       permissions: BlobSASPermissions.parse('r'),
-      startsOn: new Date(Date.now() - 5 * 60 * 1000), // 5 min ago
+      // Widen the start window to absorb clock skew between Vercel and Azure
+      startsOn: new Date(Date.now() - 10 * 60 * 1000), // 10 min ago
       expiresOn: new Date(Date.now() + expiresInHours * 60 * 60 * 1000),
       protocol: SASProtocol.Https,
+      version: SAS_VERSION,
     },
     sharedKeyCredential
   ).toString();
@@ -53,9 +59,10 @@ export function generateUploadSasUrl(containerName: string, blobName: string): s
       containerName,
       blobName,
       permissions: BlobSASPermissions.parse('rcw'),
-      startsOn: new Date(Date.now() - 5 * 60 * 1000),
+      startsOn: new Date(Date.now() - 10 * 60 * 1000),
       expiresOn: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
       protocol: SASProtocol.Https,
+      version: SAS_VERSION,
     },
     sharedKeyCredential
   ).toString();
@@ -87,4 +94,4 @@ export async function deleteBlob(containerName: string, blobName: string): Promi
   await blockBlobClient.deleteIfExists();
 }
 
-export { blobServiceClient }; 
+export { blobServiceClient };
