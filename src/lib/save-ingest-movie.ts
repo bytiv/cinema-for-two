@@ -2,24 +2,27 @@
  * save-ingest-movie.ts
  *
  * Called server-side once a torrent job reaches stage "Ready".
- * Inserts the movie row into Supabase and back-fills torrent_jobs.movie_id
- * via the upsert_torrent_job function.
+ * Inserts the movie row into Supabase (matching the direct-upload schema)
+ * and back-fills torrent_jobs.movie_id.
  *
- * Uses the service-role client so RLS doesn't block the write —
- * the auth check is already done by the calling API route.
+ * blob_url from the Python container is the SAS URL stripped of its query
+ * string — i.e. the bare https://<account>.blob.core.windows.net/<container>/<blobName>
+ * The blob_name is everything after the container segment, which for ingest
+ * jobs now matches the normal upload pattern: {userId}/{timestamp}-{slug}.{ext}
  */
 
 import { createServiceRoleClient } from '@/lib/supabase/server';
+import { generateReadSasUrl, CONTAINERS } from '@/lib/azure-blob';
 import type { TorrentJob } from '@/types';
 
 export interface SaveIngestMovieParams {
-  job:         TorrentJob;
-  userId:      string;
-  title:       string;
+  job:          TorrentJob;
+  userId:       string;
+  title:        string;
   description?: string;
-  posterUrl?:  string;
-  quality?:    '480p' | '720p' | '1080p' | '4K' | null;
-  subtitles?:  { label: string; lang: string; url: string }[];
+  posterUrl?:   string;
+  quality?:     '480p' | '720p' | '1080p' | '4K' | null;
+  subtitles?:   { label: string; lang: string; url: string }[];
 }
 
 export interface SaveIngestMovieResult {
@@ -27,14 +30,38 @@ export interface SaveIngestMovieResult {
   blobUrl: string;
 }
 
-async function probeBlobMeta(blobUrl: string): Promise<{ fileSize: number }> {
+/**
+ * Probes the blob for file size (HEAD) and duration (ffprobe via SAS URL).
+ */
+async function probeBlobMeta(
+  blobName: string,
+): Promise<{ fileSize: number; duration: number | null }> {
+  const sasUrl = generateReadSasUrl(CONTAINERS.movies, blobName, 1);
+
+  let fileSize = 0;
   try {
-    const res = await fetch(blobUrl, { method: 'HEAD' });
-    const fileSize = parseInt(res.headers.get('content-length') ?? '0', 10);
-    return { fileSize: isNaN(fileSize) ? 0 : fileSize };
+    const head = await fetch(sasUrl, { method: 'HEAD' });
+    const cl   = parseInt(head.headers.get('content-length') ?? '0', 10);
+    if (!isNaN(cl)) fileSize = cl;
+  } catch {}
+
+  let duration: number | null = null;
+  try {
+    const ffmpeg  = (await import('fluent-ffmpeg')).default;
+    const ffprobe = await import('@ffprobe-installer/ffprobe');
+    ffmpeg.setFfprobePath(ffprobe.path);
+    duration = await new Promise<number | null>((resolve) => {
+      ffmpeg.ffprobe(sasUrl, (err, metadata) => {
+        if (err) { resolve(null); return; }
+        const secs = metadata?.format?.duration;
+        resolve(typeof secs === 'number' && isFinite(secs) && secs > 0 ? Math.round(secs) : null);
+      });
+    });
   } catch {
-    return { fileSize: 0 };
+    duration = null;
   }
+
+  return { fileSize, duration };
 }
 
 export async function saveIngestMovie(
@@ -48,17 +75,29 @@ export async function saveIngestMovie(
 
   const supabase = createServiceRoleClient();
 
-  // ── 1. Derive blob_name from blob_url ─────────────────────────────────────
-  const blobName = job.blob_url.split('/').slice(-1)[0];
+  // ── Derive blob_name from blob_url ────────────────────────────────────────
+  //
+  // blob_url is the clean URL (no SAS query string):
+  //   https://<account>.blob.core.windows.net/movies/{userId}/{ts}-{slug}.{ext}
+  //
+  // We need the path after "/movies/" — that is the blob_name as stored in
+  // the normal upload flow: "{userId}/{ts}-{slug}.{ext}"
+  //
+  // Split on "/movies/" and take everything after it.
+  const afterContainer = job.blob_url.split('/movies/')[1];
+  if (!afterContainer) {
+    throw new Error(`Unexpected blob_url format — cannot extract blob_name: ${job.blob_url}`);
+  }
+  const blobName = afterContainer;   // e.g. "abc-user-id/1712345678901-interstellar.mkv"
 
-  // ── 2. Derive format from file extension ──────────────────────────────────
+  // ── Derive format ─────────────────────────────────────────────────────────
   const ext    = blobName.split('.').pop()?.toLowerCase() ?? 'mp4';
   const format = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(ext) ? ext : 'mp4';
 
-  // ── 3. Probe blob for file size (HEAD request — fast) ─────────────────────
-  const { fileSize } = await probeBlobMeta(job.blob_url);
+  // ── Probe blob ────────────────────────────────────────────────────────────
+  const { fileSize, duration } = await probeBlobMeta(blobName);
 
-  // ── 4. Insert movie row ───────────────────────────────────────────────────
+  // ── Insert movie row ──────────────────────────────────────────────────────
   const { data: movie, error: movieError } = await supabase
     .from('movies')
     .insert({
@@ -70,7 +109,7 @@ export async function saveIngestMovie(
       file_size:     fileSize,
       format,
       quality:       quality ?? null,
-      duration:      null,       // cannot be determined server-side without ffprobe
+      duration,
       subtitles:     subtitles ?? [],
       ingest_method: 'torrent',
       info_hash:     job.info_hash,
@@ -84,9 +123,7 @@ export async function saveIngestMovie(
     throw new Error(`Failed to insert movie: ${movieError?.message}`);
   }
 
-  // ── 4. Back-fill torrent_jobs.movie_id via upsert function ────────────────
-  // We use the upsert function rather than a raw UPDATE so the COALESCE guards
-  // in the function don't accidentally overwrite other fields.
+  // ── Back-fill torrent_jobs.movie_id ───────────────────────────────────────
   const { error: jobError } = await supabase.rpc('upsert_torrent_job', {
     p_job_id:       job.job_id,
     p_requested_by: userId,
@@ -97,8 +134,7 @@ export async function saveIngestMovie(
   });
 
   if (jobError) {
-    // Non-fatal — movie is saved, audit row is just missing the back-reference
-    console.error(`[save-ingest-movie] Failed to back-fill movie_id on torrent_job: ${jobError.message}`);
+    console.error(`[save-ingest-movie] back-fill movie_id: ${jobError.message}`);
   }
 
   return { movieId: movie.id, blobUrl: movie.blob_url };

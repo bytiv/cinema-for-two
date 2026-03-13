@@ -371,6 +371,72 @@ export default function MovieDetailPage() {
     loadData();
   }, [movieId]);
 
+  // ── Background probe: detect duration + file_size via a hidden <video> element ──
+  // Called only for torrent-ingested movies where these fields are null.
+  // Fetches a short-lived SAS URL from the server, loads it silently in a
+  // hidden <video> element to read metadata, then POSTs the result back.
+  async function _probeMissingMeta(id: string, needDuration: boolean, needFileSize: boolean) {
+    try {
+      const res = await fetch(`/api/movies/${id}/probe`);
+      if (!res.ok) return;
+      const { sasUrl, file_size: existingSize, duration: existingDuration } = await res.json();
+
+      // Determine what we still actually need
+      const wantDuration  = needDuration  && !existingDuration;
+      const wantFileSize  = needFileSize  && !existingSize;
+      if (!wantDuration && !wantFileSize) return;
+
+      const patch: { duration?: number; file_size?: number } = {};
+
+      // Probe file_size via HEAD on the SAS URL
+      if (wantFileSize) {
+        try {
+          const head = await fetch(sasUrl, { method: 'HEAD' });
+          const cl   = parseInt(head.headers.get('content-length') ?? '0', 10);
+          if (cl > 0) patch.file_size = cl;
+        } catch {}
+      }
+
+      // Probe duration via a hidden <video> element
+      if (wantDuration) {
+        await new Promise<void>((resolve) => {
+          const video = document.createElement('video');
+          video.preload  = 'metadata';
+          video.muted    = true;
+          video.src      = sasUrl;
+          const cleanup  = () => { video.src = ''; resolve(); };
+          video.onloadedmetadata = () => {
+            const secs = video.duration;
+            if (isFinite(secs) && secs > 0) patch.duration = Math.round(secs);
+            cleanup();
+          };
+          video.onerror = cleanup;
+          // Timeout safety — if metadata never loads, give up after 30s
+          setTimeout(cleanup, 30_000);
+        });
+      }
+
+      if (Object.keys(patch).length === 0) return;
+
+      // POST results back to the server
+      const patchRes = await fetch(`/api/movies/${id}/probe`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(patch),
+      });
+
+      if (patchRes.ok) {
+        const { updated } = await patchRes.json();
+        if (updated) {
+          // Refresh movie state so the UI reflects the new values
+          setMovie((prev) => prev ? { ...prev, ...patch } : prev);
+        }
+      }
+    } catch {
+      // Non-fatal — silently ignore
+    }
+  }
+
   async function loadData() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
@@ -420,6 +486,13 @@ export default function MovieDetailPage() {
       }
       const { data: uploaderProfile } = await supabase.from('profiles').select('*').eq('user_id', movieRes.data.uploaded_by).single();
       setMovie({ ...movieRes.data, subtitles: movieRes.data.subtitles ?? [], uploader: uploaderProfile || undefined });
+
+      // ── Background probe: back-fill duration + file_size for torrent-ingested movies ──
+      // Only runs when the movie is owned by this user and is missing metadata.
+      const m = movieRes.data;
+      if (m.uploaded_by === user.id && m.ingest_method === 'torrent' && (!m.duration || !m.file_size)) {
+        _probeMissingMeta(m.id, !m.duration, !m.file_size);
+      }
     }
     if (profileRes.data) setCurrentUser({ id: user.id, profile: profileRes.data });
     if (historyRes.data) setWatchHistory(historyRes.data);

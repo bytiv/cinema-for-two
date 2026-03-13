@@ -1,100 +1,118 @@
 /**
- * Server-side client for the Python Media Ingest API.
+ * POST /api/ingest/start
  *
- * Never import this from a client component — it reads INGEST_API_KEY
- * which is a server-only env var (no NEXT_PUBLIC_ prefix).
+ * Submits a torrent hash/magnet to the Python ingest API.
  *
- * All fetch calls throw on non-2xx so callers can catch and surface errors.
+ * This route is the ONLY place that touches Azure storage details.
+ * It generates a blob name matching the normal upload convention
+ * ({userId}/{timestamp}-{name}) and a write-scoped SAS URL for that
+ * exact blob, then passes both to the container.  The container never
+ * sees the account name, key, or container name — only the SAS URL.
+ *
+ * Body: {
+ *   hash:        string   — bare InfoHash or magnet URI
+ *   name:        string   — desired filename without extension (slug)
+ *   title:       string   — movie title shown in the library
+ *   description? string
+ *   quality?     '480p' | '720p' | '1080p' | '4K'
+ *   posterUrl?   string
+ *   trackers?    string[]
+ * }
+ *
+ * Returns: { jobId, stage, meta }
  */
 
-import type { TorrentJob, TorrentJobRequest } from '@/types';
+import { NextResponse }                                   from 'next/server';
+import { createServerSupabaseClient,
+         createServiceRoleClient }                        from '@/lib/supabase/server';
+import { generateUploadSasUrl, CONTAINERS }               from '@/lib/azure-blob';
+import { startIngestJob }                                 from '@/lib/ingest-api';
 
-const BASE_URL = process.env.INGEST_API_URL?.replace(/\/$/, '');
-const API_KEY  = process.env.INGEST_API_KEY ?? '';
+export async function POST(request: Request) {
+  try {
+    // ── Auth ──────────────────────────────────────────────────────────────────
+    const supabase = createServerSupabaseClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-if (!BASE_URL) {
-  // Warn at boot time so it's obvious in logs — don't throw so build succeeds
-  console.warn('[ingest-api] INGEST_API_URL is not set — torrent ingest will fail at runtime');
-}
+    // ── Validate body ─────────────────────────────────────────────────────────
+    const body = await request.json();
+    const { hash, name, title, description, quality, posterUrl, trackers } = body;
 
-// ── Shared headers ────────────────────────────────────────────────────────────
+    if (!hash?.trim())  return NextResponse.json({ error: 'hash is required'  }, { status: 400 });
+    if (!name?.trim())  return NextResponse.json({ error: 'name is required'  }, { status: 400 });
+    if (!title?.trim()) return NextResponse.json({ error: 'title is required' }, { status: 400 });
 
-function headers(extra: Record<string, string> = {}): Record<string, string> {
-  return {
-    'Content-Type': 'application/json',
-    ...(API_KEY ? { 'X-Api-Key': API_KEY } : {}),
-    ...extra,
-  };
-}
+    // ── Build blob name matching the normal upload convention ─────────────────
+    //
+    //   Normal upload:  {userId}/{timestamp}-{sanitizedFileName}.{ext}
+    //   Ingest upload:  {userId}/{timestamp}-{sanitizedName}          ← no ext yet
+    //
+    // The container appends the real extension once it knows the downloaded
+    // file's type (e.g. .mkv, .mp4).  We therefore create the SAS URL
+    // without an extension — Azure Blob Storage will create the blob at
+    // exactly the path in the SAS, so the container must use this name
+    // verbatim and append the extension itself when uploading.
+    //
+    // We store blobBaseName in Supabase so save-ingest-movie.ts can
+    // reconstruct the final blob_name once the extension is known.
 
-// ── Response helpers ──────────────────────────────────────────────────────────
+    const timestamp    = Date.now();
+    const sanitized    = name.trim()
+      .replace(/[^a-zA-Z0-9-_]/g, '_')
+      .slice(0, 50);
+    const blobBaseName = `${user.id}/${timestamp}-${sanitized}`;
 
-async function expectJson<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = body.detail ?? body.error ?? detail;
-    } catch {}
-    throw new Error(`Ingest API ${res.status}: ${detail}`);
+    // ── Generate write-scoped SAS URL ─────────────────────────────────────────
+    //
+    // Expires in 6 hours — enough for a long download + upload.
+    // Permissions: r (read) + c (create) + w (write) — same as normal upload SAS.
+    // The container does a single PUT to this URL; it cannot list or delete.
+    //
+    // NOTE: We pass blobBaseName (no extension) to generateUploadSasUrl.
+    //       The container MUST upload to this exact blob name (appending its
+    //       own extension).  The SAS is locked to blobBaseName; if the container
+    //       tries to write to a different path, Azure will reject the request.
+    //       This is intentional — it prevents the container from writing
+    //       anywhere other than the pre-approved path.
+
+    const sasUrl = generateUploadSasUrl(CONTAINERS.movies, blobBaseName, 6);
+
+    // ── Forward to Python ingest API ──────────────────────────────────────────
+    const { job_id, stage } = await startIngestJob({
+      hash:          hash.trim(),
+      name:          sanitized,          // slug only — container appends extension
+      blob_base_name: blobBaseName,      // full path without extension
+      sas_url:       sasUrl,             // write SAS — no account key ever sent
+      trackers:      trackers ?? undefined,
+    });
+
+    // ── Create Supabase audit row ─────────────────────────────────────────────
+    const service = createServiceRoleClient();
+    const { error: rpcError } = await service.rpc('upsert_torrent_job', {
+      p_job_id:       job_id,
+      p_requested_by: user.id,
+      p_info_hash:    hash.trim(),
+      p_stage:        stage,
+      p_notification: 'Job queued',
+    });
+    if (rpcError) {
+      console.error('[ingest/start] upsert_torrent_job:', rpcError.message);
+    }
+
+    return NextResponse.json({
+      jobId: job_id,
+      stage,
+      meta: { title, description, quality, posterUrl },
+    });
+
+  } catch (err: any) {
+    console.error('[ingest/start]', err);
+    return NextResponse.json(
+      { error: err.message ?? 'Failed to start ingest job' },
+      { status: 502 },
+    );
   }
-  return res.json() as Promise<T>;
-}
-
-// ── API calls ─────────────────────────────────────────────────────────────────
-
-/**
- * Start a new torrent ingest job.
- * Returns { job_id, stage } immediately — job runs in the background.
- */
-export async function startIngestJob(
-  req: TorrentJobRequest,
-): Promise<{ job_id: string; stage: string }> {
-  const res = await fetch(`${BASE_URL}/download`, {
-    method:  'POST',
-    headers: headers(),
-    body:    JSON.stringify(req),
-    // next.js server fetch — no caching needed here
-    cache:   'no-store',
-  });
-  return expectJson(res);
-}
-
-/**
- * Fetch a single status snapshot for a job.
- */
-export async function getIngestJobStatus(jobId: string): Promise<TorrentJob> {
-  const res = await fetch(`${BASE_URL}/status/${jobId}`, {
-    headers: headers(),
-    cache:   'no-store',
-  });
-  return expectJson(res);
-}
-
-/**
- * Cancel a running job.
- * Returns the final job state.
- */
-export async function cancelIngestJob(jobId: string): Promise<TorrentJob> {
-  const res = await fetch(`${BASE_URL}/jobs/${jobId}`, {
-    method:  'DELETE',
-    headers: headers(),
-    cache:   'no-store',
-  });
-  return expectJson(res);
-}
-
-/**
- * Returns the raw Response for the SSE stream endpoint.
- * Caller is responsible for piping the body to the client.
- * We deliberately do NOT await/buffer — we stream it through.
- */
-export function getIngestJobStream(jobId: string): Promise<Response> {
-  return fetch(`${BASE_URL}/status/${jobId}/stream`, {
-    headers: {
-      ...(API_KEY ? { 'X-Api-Key': API_KEY } : {}),
-      Accept: 'text/event-stream',
-    },
-    cache: 'no-store',
-  });
 }

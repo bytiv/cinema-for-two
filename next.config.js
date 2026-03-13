@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Keep ffmpeg/ffprobe out of the webpack bundle — they're Node.js-only
+  serverExternalPackages: ['fluent-ffmpeg', '@ffprobe-installer/ffprobe'],
   images: {
     remotePatterns: [
       {

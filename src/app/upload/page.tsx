@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 import { formatFileSize, generateBlobName, getVideoMimeType, formatDuration } from '@/lib/utils';
 import { VideoQuality } from '@/types';
 import type { TorrentJob } from '@/types';
-import DurationInput from '@/components/ui/DurationInput';
+// import DurationInput from '@/components/ui/DurationInput';
 import {
   Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle,
   Plus, Globe, Gauge, Clock, Hash, Magnet, ChevronDown, ChevronUp,
@@ -263,13 +263,15 @@ export default function UploadPage() {
   const [dragActive,      setDragActive]      = useState(false);
 
   // ── Torrent state ──────────────────────────────────────────
-  const [hashInput,        setHashInput]        = useState('');
-  const [torrentTitle,     setTorrentTitle]     = useState('');
-  const [torrentDesc,      setTorrentDesc]      = useState('');
-  const [torrentQuality,   setTorrentQuality]   = useState<VideoQuality | null>(null);
-  const [torrentSubtitles, setTorrentSubtitles] = useState<SubtitleEntry[]>([]);
-  const [torrentError,     setTorrentError]     = useState('');
-  const [submitting,       setSubmitting]       = useState(false);
+  const [hashInput,          setHashInput]          = useState('');
+  const [torrentTitle,       setTorrentTitle]       = useState('');
+  const [torrentDesc,        setTorrentDesc]        = useState('');
+  const [torrentQuality,     setTorrentQuality]     = useState<VideoQuality | null>(null);
+  const [torrentSubtitles,   setTorrentSubtitles]   = useState<SubtitleEntry[]>([]);
+  const [torrentPosterFile,  setTorrentPosterFile]  = useState<File | null>(null);
+  const [torrentPosterPreview, setTorrentPosterPreview] = useState<string | null>(null);
+  const [torrentError,       setTorrentError]       = useState('');
+  const [submitting,         setSubmitting]         = useState(false);
 
   // ── Active jobs state ──────────────────────────────────────
   const [activeJobs,    setActiveJobs]    = useState<ActiveJob[]>([]);
@@ -364,6 +366,28 @@ export default function UploadPage() {
     setTorrentError('');
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      // ── 1. Upload poster if provided ─────────────────────────
+      let posterUrl: string | undefined;
+      if (torrentPosterFile) {
+        const posterName   = generateBlobName(user.id, torrentPosterFile.name);
+        const posterSasRes = await fetch('/api/upload/sas', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ container: 'posters', blobName: posterName, contentType: torrentPosterFile.type }),
+        });
+        if (!posterSasRes.ok) throw new Error('Failed to get poster upload URL');
+        const { uploadUrl: pUrl, readUrl: pReadUrl } = await posterSasRes.json();
+        await fetch(pUrl, {
+          method: 'PUT',
+          headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': torrentPosterFile.type },
+          body: torrentPosterFile,
+        });
+        posterUrl = pReadUrl;
+      }
+
+      // ── 2. Start the ingest job ──────────────────────────────
       const name = torrentTitle.trim()
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
@@ -378,6 +402,7 @@ export default function UploadPage() {
           title:       torrentTitle.trim(),
           description: torrentDesc.trim() || undefined,
           quality:     torrentQuality ?? undefined,
+          posterUrl,
         }),
       });
 
@@ -406,6 +431,8 @@ export default function UploadPage() {
       setTorrentDesc('');
       setTorrentQuality(null);
       setTorrentSubtitles([]);
+      setTorrentPosterFile(null);
+      setTorrentPosterPreview(null);
       setTab('jobs');
 
     } catch (err: any) {
@@ -474,6 +501,14 @@ export default function UploadPage() {
     if (file.size > MAX_POSTER_SIZE) { setDirectError('Poster image must be under 10MB'); return; }
     setPosterFile(file);
     setPosterPreview(URL.createObjectURL(file));
+  };
+
+  const handleTorrentPosterSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_POSTER_SIZE) { setTorrentError('Poster image must be under 10MB'); return; }
+    setTorrentPosterFile(file);
+    setTorrentPosterPreview(URL.createObjectURL(file));
   };
 
   const handleSubtitleAdd = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -711,7 +746,7 @@ export default function UploadPage() {
                   ))}
                 </div>
               </div>
-              <DurationInput value={duration} onChange={setDuration} detected={detectedDuration} />
+              {/* <DurationInput value={duration} onChange={setDuration} detected={detectedDuration} /> */}
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-cinema-text-muted">Poster Image (optional)</label>
                 <div className="flex items-start gap-4">
@@ -862,6 +897,33 @@ export default function UploadPage() {
                       <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Poster */}
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-cinema-text-muted">
+                  Poster Image <span className="text-xs font-normal text-cinema-text-dim">(optional)</span>
+                </label>
+                <div className="flex items-start gap-4">
+                  {torrentPosterPreview ? (
+                    <div className="relative w-20 h-28 rounded-lg overflow-hidden bg-cinema-surface flex-shrink-0">
+                      <img src={torrentPosterPreview} alt="Poster" className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => { setTorrentPosterFile(null); setTorrentPosterPreview(null); }}
+                        className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center"
+                      >
+                        <X className="w-3 h-3 text-white" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="w-20 h-28 rounded-lg border-2 border-dashed border-cinema-border hover:border-cinema-accent/50 flex flex-col items-center justify-center cursor-pointer transition-colors flex-shrink-0">
+                      <ImageIcon className="w-5 h-5 text-cinema-text-dim mb-1" />
+                      <span className="text-[10px] text-cinema-text-dim">Add poster</span>
+                      <input type="file" accept={ACCEPTED_IMAGE} onChange={handleTorrentPosterSelect} className="hidden" />
+                    </label>
+                  )}
+                  <p className="text-xs text-cinema-text-dim mt-2">Uploaded to your library before the download starts. JPG, PNG, or WebP under 10MB.</p>
                 </div>
               </div>
 
