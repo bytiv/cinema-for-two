@@ -488,9 +488,11 @@ export default function MovieDetailPage() {
       setMovie({ ...movieRes.data, subtitles: movieRes.data.subtitles ?? [], uploader: uploaderProfile || undefined });
 
       // ── Background probe: back-fill duration + file_size for torrent-ingested movies ──
-      // Only runs when the movie is owned by this user and is missing metadata.
+      // Runs for any ingest method when the movie is owned by this user and
+      // duration or file_size are missing (torrent ffprobe may have failed,
+      // or direct upload browser detection was skipped).
       const m = movieRes.data;
-      if (m.uploaded_by === user.id && m.ingest_method === 'torrent' && (!m.duration || !m.file_size)) {
+      if (m.uploaded_by === user.id && (!m.duration || !m.file_size)) {
         _probeMissingMeta(m.id, !m.duration, !m.file_size);
       }
     }

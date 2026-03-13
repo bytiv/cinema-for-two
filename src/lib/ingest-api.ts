@@ -71,10 +71,10 @@ async function expectJson<T>(res: Response): Promise<T> {
 // ── Request type ──────────────────────────────────────────────────────────────
 
 export interface IngestJobRequest {
-  hash:           string;
-  name:           string;   // slug — container appends the file extension
-  blob_base_name: string;   // full path without extension: {userId}/{ts}-{slug}
-  sas_url:        string;   // write-scoped SAS URL for the target blob
+  hash:             string;
+  name:             string;   // slug — container discovers and appends the extension
+  blob_base_name:   string;   // full path without extension: {userId}/{ts}-{slug}
+  sas_callback_url: string;   // container calls this to get a SAS once ext is known
   trackers?:      string[];
 }
 
@@ -83,7 +83,7 @@ export interface IngestJobRequest {
 /**
  * Start a new torrent ingest job.
  *
- * The caller is responsible for generating blob_base_name and sas_url
+ * The caller is responsible for generating blob_base_name and sas_callback_url
  * (see ingest/start/route.ts).  This function simply signs the request
  * and forwards it to the container — no Azure imports needed here.
  */
