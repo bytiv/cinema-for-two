@@ -20,8 +20,9 @@
 import { NextResponse }               from 'next/server';
 import { createServerSupabaseClient, createServiceRoleClient } from '@/lib/supabase/server';
 import { getIngestJobStream }         from '@/lib/ingest-api';
-import { saveIngestMovie }            from '@/lib/save-ingest-movie';
 import type { TorrentJob }            from '@/types';
+// saveIngestMovie is imported dynamically below to keep fluent-ffmpeg /
+// @ffprobe-installer out of the webpack bundle (Next.js 14 limitation).
 
 interface Params { params: { jobId: string } }
 
@@ -151,6 +152,7 @@ export async function GET(req: Request, { params }: Params) {
               movieSaved = true; // prevent double-save on repeated Ready events
 
               try {
+                const { saveIngestMovie } = await import('@/lib/save-ingest-movie');
                 const { movieId } = await saveIngestMovie({
                   job,
                   userId:      user.id,

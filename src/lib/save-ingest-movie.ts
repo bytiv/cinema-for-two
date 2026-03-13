@@ -88,11 +88,16 @@ export async function saveIngestMovie(
   if (!afterContainer) {
     throw new Error(`Unexpected blob_url format — cannot extract blob_name: ${job.blob_url}`);
   }
-  const blobName = afterContainer;   // e.g. "abc-user-id/1712345678901-interstellar.mkv"
+
+  // blob_url has no extension (SAS was signed for the base path).
+  // blob_ext carries the real extension discovered after download, e.g. ".mkv".
+  const ext         = (job as any).blob_ext ?? '.mp4';
+  const extClean    = ext.replace('.', '').toLowerCase();
+  const blobName    = `${afterContainer}${ext}`;        // e.g. "abc/1712345678901-interstellar.mkv"
+  const fullBlobUrl = `${job.blob_url}${ext}`;
 
   // ── Derive format ─────────────────────────────────────────────────────────
-  const ext    = blobName.split('.').pop()?.toLowerCase() ?? 'mp4';
-  const format = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(ext) ? ext : 'mp4';
+  const format = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(extClean) ? extClean : 'mp4';
 
   // ── Probe blob ────────────────────────────────────────────────────────────
   const { fileSize, duration } = await probeBlobMeta(blobName);
@@ -103,7 +108,7 @@ export async function saveIngestMovie(
     .insert({
       title:         title.trim(),
       description:   description?.trim() ?? null,
-      blob_url:      job.blob_url,
+      blob_url:      fullBlobUrl,
       blob_name:     blobName,
       poster_url:    posterUrl ?? null,
       file_size:     fileSize,

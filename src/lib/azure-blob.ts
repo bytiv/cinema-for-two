@@ -52,15 +52,15 @@ export function generateReadSasUrl(containerName: string, blobName: string, expi
   return `https://${accountName}.blob.core.windows.net/${containerName}/${blobName}?${sasToken}`;
 }
 
-// Generate a SAS URL for uploading (expires in 1 hour)
-export function generateUploadSasUrl(containerName: string, blobName: string): string {
+// Generate a SAS URL for uploading (expires in expiresInHours, default 1 hour)
+export function generateUploadSasUrl(containerName: string, blobName: string, expiresInHours = 1): string {
   const sasToken = generateBlobSASQueryParameters(
     {
       containerName,
       blobName,
       permissions: BlobSASPermissions.parse('rcw'),
       startsOn: new Date(Date.now() - 10 * 60 * 1000),
-      expiresOn: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+      expiresOn: new Date(Date.now() + expiresInHours * 60 * 60 * 1000),
       protocol: SASProtocol.Https,
       version: SAS_VERSION,
     },

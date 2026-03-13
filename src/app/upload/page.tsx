@@ -381,7 +381,7 @@ export default function UploadPage() {
         const { uploadUrl: pUrl, readUrl: pReadUrl } = await posterSasRes.json();
         await fetch(pUrl, {
           method: 'PUT',
-          headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': torrentPosterFile.type },
+          headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': torrentPosterFile.type, 'Content-Length': String(torrentPosterFile.size) },
           body: torrentPosterFile,
         });
         posterUrl = pReadUrl;
@@ -544,7 +544,7 @@ export default function UploadPage() {
     if (!sasRes.ok) throw new Error('Failed to get subtitle upload URL');
     const { uploadUrl, readUrl } = await sasRes.json();
     const body = entry.file.name.toLowerCase().endsWith('.srt') ? await srtToVtt(entry.file) : entry.file;
-    await fetch(uploadUrl, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'text/vtt' }, body });
+    await fetch(uploadUrl, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'text/vtt', 'Content-Length': String(body instanceof Blob ? body.size : (body as File).size) }, body });
     return { label: entry.label, lang: entry.lang, url: readUrl };
   };
 
@@ -587,7 +587,7 @@ export default function UploadPage() {
         });
         if (posterSasRes.ok) {
           const { uploadUrl: pUrl } = await posterSasRes.json();
-          await fetch(pUrl, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': posterFile.type }, body: posterFile });
+          await fetch(pUrl, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': posterFile.type, 'Content-Length': String(posterFile.size) }, body: posterFile });
           posterBlobName = posterName;
         }
       }
