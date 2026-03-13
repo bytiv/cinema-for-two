@@ -356,6 +356,8 @@ export default function MovieDetailPage() {
   const supabase = createClient();
   const movieId = params.id as string;
 
+  const { adminMode } = useAdminMode();
+
   const [movie, setMovie] = useState<Movie | null>(null);
   const [currentUser, setCurrentUser] = useState<{ id: string; profile: Profile } | null>(null);
   const [watchHistory, setWatchHistory] = useState<WatchHistory[]>([]);
@@ -556,7 +558,6 @@ export default function MovieDetailPage() {
     </div>
   );
 
-  const { adminMode } = useAdminMode();
   const isUploader = currentUser?.id === movie.uploaded_by;
   const canEdit = isUploader || adminMode;
 

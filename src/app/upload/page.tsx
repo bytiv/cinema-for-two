@@ -64,7 +64,7 @@ interface ActiveJob {
   title:       string;
   hash:        string;
   job:         TorrentJob | null;
-  streamMeta:  { description?: string; quality?: string; posterUrl?: string; subtitles?: SubtitleEntry[] };
+  streamMeta:  { description?: string; quality?: string; posterUrl?: string; subtitles?: { label: string; lang: string; url: string }[] };
   startedAt:   number;
   movieId?:    string;
 }
@@ -97,6 +97,9 @@ function buildStreamUrl(jobId: string, meta: ActiveJob['streamMeta'] & { title: 
   if (meta.description) p.set('description', meta.description);
   if (meta.quality)     p.set('quality',     meta.quality);
   if (meta.posterUrl)   p.set('posterUrl',   meta.posterUrl);
+  if (meta.subtitles && meta.subtitles.length > 0) {
+    p.set('subtitles', JSON.stringify(meta.subtitles));
+  }
   return `/api/ingest/${jobId}/stream?${p.toString()}`;
 }
 
@@ -163,7 +166,7 @@ function JobCard({
               <div className="flex items-center gap-3 text-cinema-text-muted">
                 {job.download_speed && <span>{job.download_speed}</span>}
                 {job.download_eta   && <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{job.download_eta}</span>}
-                {job.seeder_count != null && (
+                {job.seeder_count != null && job.download_percent < 100 && (
                   <span className={cn(
                     'flex items-center gap-1',
                     job.seeder_count === 0 ? 'text-cinema-error' :
@@ -387,6 +390,16 @@ export default function UploadPage() {
         posterUrl = pReadUrl;
       }
 
+      // ── 1b. Upload subtitles now — before the job starts ────
+      // File objects can't be serialised or sent to the server later,
+      // so we upload them to Azure here and store the resulting URLs.
+      let uploadedSubtitles: { label: string; lang: string; url: string }[] = [];
+      if (torrentSubtitles.length > 0) {
+        uploadedSubtitles = await Promise.all(
+          torrentSubtitles.map((s) => uploadSubtitleFile(s, user.id))
+        );
+      }
+
       // ── 2. Start the ingest job ──────────────────────────────
       const name = torrentTitle.trim()
         .toLowerCase()
@@ -412,7 +425,7 @@ export default function UploadPage() {
       }
 
       const { jobId, meta } = await res.json();
-      const streamMeta = { ...meta, subtitles: torrentSubtitles };
+      const streamMeta = { ...meta, subtitles: uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined };
 
       const newJob: ActiveJob = {
         jobId,

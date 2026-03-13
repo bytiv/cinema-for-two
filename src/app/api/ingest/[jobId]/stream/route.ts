@@ -60,6 +60,12 @@ export async function GET(req: Request, { params }: Params) {
   const quality     = (url.searchParams.get('quality') ?? undefined) as
     '480p' | '720p' | '1080p' | '4K' | undefined;
 
+  let subtitles: { label: string; lang: string; url: string }[] | undefined;
+  try {
+    const raw = url.searchParams.get('subtitles');
+    if (raw) subtitles = JSON.parse(raw);
+  } catch {}
+
 
   // ── Connect to Python SSE stream ─────────────────────────────────────────────
   let upstreamRes: Response;
@@ -160,7 +166,7 @@ export async function GET(req: Request, { params }: Params) {
                   description,
                   posterUrl,
                   quality,
-                  // subtitles uploaded separately after movie is saved
+                  subtitles,
                 });
 
                 // Enrich the forwarded event with the new movie_id

@@ -5,10 +5,11 @@
  * Inserts the movie row into Supabase (matching the direct-upload schema)
  * and back-fills torrent_jobs.movie_id.
  *
- * blob_url from the Python container is the SAS URL stripped of its query
- * string — i.e. the bare https://<account>.blob.core.windows.net/<container>/<blobName>
- * The blob_name is everything after the container segment, which for ingest
- * jobs now matches the normal upload pattern: {userId}/{timestamp}-{slug}.{ext}
+ * blob_url from the Python container is the clean canonical URL with
+ * extension already included:
+ *   https://<account>.blob.core.windows.net/movies/{userId}/{ts}-{slug}.{ext}
+ *
+ * This matches the normal upload pattern exactly — no reconstruction needed.
  */
 
 import { createServiceRoleClient } from '@/lib/supabase/server';
@@ -77,27 +78,19 @@ export async function saveIngestMovie(
 
   // ── Derive blob_name from blob_url ────────────────────────────────────────
   //
-  // blob_url is the clean URL (no SAS query string):
+  // blob_url is the clean canonical URL with extension:
   //   https://<account>.blob.core.windows.net/movies/{userId}/{ts}-{slug}.{ext}
   //
-  // We need the path after "/movies/" — that is the blob_name as stored in
-  // the normal upload flow: "{userId}/{ts}-{slug}.{ext}"
-  //
-  // Split on "/movies/" and take everything after it.
-  const afterContainer = job.blob_url.split('/movies/')[1];
+  // Extract everything after "/movies/" as the blob_name.
+  const afterContainer = job.blob_url.split(`/${CONTAINERS.movies}/`)[1];
   if (!afterContainer) {
     throw new Error(`Unexpected blob_url format — cannot extract blob_name: ${job.blob_url}`);
   }
 
-  // blob_url has no extension (SAS was signed for the base path).
-  // blob_ext carries the real extension discovered after download, e.g. ".mkv".
-  const ext         = (job as any).blob_ext ?? '.mp4';
-  const extClean    = ext.replace('.', '').toLowerCase();
-  const blobName    = `${afterContainer}${ext}`;        // e.g. "abc/1712345678901-interstellar.mkv"
-  const fullBlobUrl = `${job.blob_url}${ext}`;
-
-  // ── Derive format ─────────────────────────────────────────────────────────
-  const format = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(extClean) ? extClean : 'mp4';
+  // blob_name already includes the extension (e.g. "userId/ts-movietest.mkv")
+  const blobName  = afterContainer;
+  const ext       = blobName.split('.').pop()?.toLowerCase() ?? 'mp4';
+  const format    = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(ext) ? ext : 'mp4';
 
   // ── Probe blob ────────────────────────────────────────────────────────────
   const { fileSize, duration } = await probeBlobMeta(blobName);
@@ -108,7 +101,7 @@ export async function saveIngestMovie(
     .insert({
       title:         title.trim(),
       description:   description?.trim() ?? null,
-      blob_url:      fullBlobUrl,
+      blob_url:      job.blob_url,
       blob_name:     blobName,
       poster_url:    posterUrl ?? null,
       file_size:     fileSize,

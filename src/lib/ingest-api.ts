@@ -5,11 +5,10 @@
  * ──────────────
  * • Every request is signed with a short-lived HMAC-HS256 JWT so the
  *   Python container can verify the call genuinely came from this app.
- * • The container never receives any Azure storage credentials.
- *   The caller (ingest/start/route.ts) generates a write-scoped SAS URL
- *   and passes it here; we forward it to the container alongside the job.
- * • This file has zero imports from @/lib/azure-blob — all Azure details
- *   stay in the route handler that calls us.
+ * • Azure storage credentials travel in the signed request body — the
+ *   container reads them per-job and never has them as env vars.
+ * • The HMAC secret is the only thing that needs to be in the container's
+ *   environment. Everything else is sent by Next.js at job-start time.
  *
  * Never import this from a client component.
  */
@@ -28,9 +27,6 @@ if (!HMAC_SECRET) {
 }
 
 // ── HMAC-HS256 JWT ────────────────────────────────────────────────────────────
-// Minimal HS256 JWT using Node stdlib only (no third-party dep).
-// The Python container verifies the same way (stdlib hmac + hashlib).
-// Token TTL: 5 minutes — short enough to be useless if intercepted.
 
 function b64url(value: Buffer | string): string {
   const buf = Buffer.isBuffer(value) ? value : Buffer.from(value);
@@ -71,22 +67,17 @@ async function expectJson<T>(res: Response): Promise<T> {
 // ── Request type ──────────────────────────────────────────────────────────────
 
 export interface IngestJobRequest {
-  hash:             string;
-  name:             string;   // slug — container discovers and appends the extension
-  blob_base_name:   string;   // full path without extension: {userId}/{ts}-{slug}
-  sas_callback_url: string;   // container calls this to get a SAS once ext is known
-  trackers?:      string[];
+  hash:            string;
+  name:            string;    // display name / slug
+  blob_base_name:  string;    // full path without extension: {userId}/{ts}-{slug}
+  storage_account: string;    // Azure storage account name
+  storage_key:     string;    // Azure storage account key
+  container_name:  string;    // blob container (e.g. "movies")
+  trackers?:       string[];
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────────
 
-/**
- * Start a new torrent ingest job.
- *
- * The caller is responsible for generating blob_base_name and sas_callback_url
- * (see ingest/start/route.ts).  This function simply signs the request
- * and forwards it to the container — no Azure imports needed here.
- */
 export async function startIngestJob(
   req: IngestJobRequest,
 ): Promise<{ job_id: string; stage: string }> {
@@ -99,7 +90,6 @@ export async function startIngestJob(
   return expectJson(res);
 }
 
-/** Fetch a single status snapshot for a job. */
 export async function getIngestJobStatus(jobId: string): Promise<TorrentJob> {
   const res = await fetch(`${BASE_URL}/status/${jobId}`, {
     headers: authHeaders(),
@@ -108,7 +98,6 @@ export async function getIngestJobStatus(jobId: string): Promise<TorrentJob> {
   return expectJson(res);
 }
 
-/** Cancel a running job. Returns the final job state. */
 export async function cancelIngestJob(jobId: string): Promise<TorrentJob> {
   const res = await fetch(`${BASE_URL}/jobs/${jobId}`, {
     method:  'DELETE',
@@ -118,10 +107,6 @@ export async function cancelIngestJob(jobId: string): Promise<TorrentJob> {
   return expectJson(res);
 }
 
-/**
- * Returns the raw Response for the SSE stream endpoint.
- * Caller pipes the body to the browser — we do not buffer it.
- */
 export function getIngestJobStream(jobId: string): Promise<Response> {
   return fetch(`${BASE_URL}/status/${jobId}/stream`, {
     headers: authHeaders({ Accept: 'text/event-stream' }),
