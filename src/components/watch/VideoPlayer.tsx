@@ -60,6 +60,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const isExternalRef  = useRef(false);
   const lastTapRef     = useRef<number>(0);
   const isDraggingRef  = useRef(false);
+  const isMobileRef    = useRef(false);
 
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [currentTime,  setCurrentTime]  = useState(0);
@@ -70,7 +71,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [showControls, setShowControls] = useState(true);
   const [buffered,     setBuffered]     = useState(0);
   const [isMobile,     setIsMobile]     = useState(false);
-  const isMobileRef = useRef(false);
   const [isWaiting,    setIsWaiting]    = useState(false);
 
   // Hover tooltip state
@@ -93,13 +93,14 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     });
   }, []);
 
-  const preloader = useVideoPreloader({ videoRef, src, enabled: !isMobileRef.current });
-
+  // Detect mobile early via ref so preloader reads correct value on first render
   useEffect(() => {
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     isMobileRef.current = mobile;
     setIsMobile(mobile);
   }, []);
+
+  const preloader = useVideoPreloader({ videoRef, src, enabled: !isMobileRef.current });
 
   useEffect(() => {
     const update = () => setIsFullscreen(!!getFullscreenElement());
@@ -357,7 +358,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         onEnded={() => setIsPlaying(false)}
       >
         {subtitles.map((t) => (
-          <track key={t.lang} kind="subtitles" src={t.url} srcLang={t.lang} label={t.label} crossOrigin="anonymous" />
+          <track key={t.lang} kind="subtitles" src={t.url} srcLang={t.lang} label={t.label} />
         ))}
       </video>
 
