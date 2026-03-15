@@ -27,11 +27,6 @@ function saveSubStyle(style: SubtitleStyle) {
   document.cookie = `subStyle=${encodeURIComponent(JSON.stringify(style))}; expires=${expires}; path=/; SameSite=Lax`;
 }
 
-interface SubtitleTrack { label: string; lang: string; url: string; }
-interface SubtitleStyle {
-  size: number; opacity: number; bg: 'black' | 'dark' | 'none';
-  position: 'bottom' | 'top'; color: 'white' | 'yellow' | 'cyan';
-}
 interface VideoPlayerProps {
   src: string;
   subtitles?: SubtitleTrack[];
@@ -65,11 +60,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const hideTimeoutRef = useRef<NodeJS.Timeout>();
   const isExternalRef  = useRef(false);
   const lastTapRef     = useRef<number>(0);
-<<<<<<< HEAD
   const isDraggingRef  = useRef(false);
   const isMobileRef    = useRef(false);
-=======
->>>>>>> parent of 4061064 (video player fixed + time on hover)
 
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [currentTime,  setCurrentTime]  = useState(0);
@@ -100,13 +92,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       return next;
     });
   }, []);
-<<<<<<< HEAD
 
   // Detect mobile early via ref so preloader reads correct value on first render
-=======
-  const preloader = useVideoPreloader({ videoRef, src, enabled: true });
-
->>>>>>> parent of 4061064 (video player fixed + time on hover)
   useEffect(() => {
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     isMobileRef.current = mobile;
@@ -282,10 +269,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         className="w-full h-full object-contain"
         onClick={isMobile ? undefined : togglePlay}
         preload="auto"
-<<<<<<< HEAD
         playsInline
-=======
->>>>>>> parent of 4061064 (video player fixed + time on hover)
         onTimeUpdate={() => { if (videoRef.current) setCurrentTime(videoRef.current.currentTime); }}
         onLoadedMetadata={() => {
           if (videoRef.current) {
@@ -298,7 +282,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
             setBuffered(videoRef.current.buffered.end(videoRef.current.buffered.length - 1));
         }}
         onEnded={() => setIsPlaying(false)}
-        playsInline
         crossOrigin="anonymous"
       >
         {subtitles.map((t) => (
@@ -312,8 +295,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           <div className="w-12 h-12 rounded-full border-2 border-cinema-accent/30 border-t-cinema-accent animate-spin" />
         </div>
       )}
-
-
 
       {/* ── Subtitles ── */}
       {activeSubtitle && currentCue && (
@@ -350,7 +331,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         )}
         style={{ padding: '0 12px 12px' }}
       >
-        {/* Progress bar — multi-range buffered segments */}
+        {/* Progress bar */}
         <div
           ref={progressRef}
           className="relative cursor-pointer mb-3 group/progress"
@@ -398,8 +379,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-
-
             {subtitles.length > 0 && (
               <div className="relative">
                 <button
