@@ -27,6 +27,11 @@ function saveSubStyle(style: SubtitleStyle) {
   document.cookie = `subStyle=${encodeURIComponent(JSON.stringify(style))}; expires=${expires}; path=/; SameSite=Lax`;
 }
 
+interface SubtitleTrack { label: string; lang: string; url: string; }
+interface SubtitleStyle {
+  size: number; opacity: number; bg: 'black' | 'dark' | 'none';
+  position: 'bottom' | 'top'; color: 'white' | 'yellow' | 'cyan';
+}
 interface VideoPlayerProps {
   src: string;
   subtitles?: SubtitleTrack[];
@@ -38,6 +43,7 @@ interface VideoPlayerProps {
 
 const BG_MAP    = { black: 'rgba(0,0,0,0.85)', dark: 'rgba(0,0,0,0.45)', none: 'transparent' };
 const COLOR_MAP = { white: '#ffffff', yellow: '#fde68a', cyan: '#a5f3fc' };
+
 
 function requestFullscreen(el: HTMLElement) {
   if (el.requestFullscreen)               return el.requestFullscreen();
@@ -59,8 +65,11 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const hideTimeoutRef = useRef<NodeJS.Timeout>();
   const isExternalRef  = useRef(false);
   const lastTapRef     = useRef<number>(0);
+<<<<<<< HEAD
   const isDraggingRef  = useRef(false);
   const isMobileRef    = useRef(false);
+=======
+>>>>>>> parent of 4061064 (video player fixed + time on hover)
 
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [currentTime,  setCurrentTime]  = useState(0);
@@ -73,17 +82,16 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [isMobile,     setIsMobile]     = useState(false);
   const [isWaiting,    setIsWaiting]    = useState(false);
 
-  // Hover tooltip state
-  const [hoverTime,    setHoverTime]    = useState<number | null>(null);
-  const [hoverX,       setHoverX]       = useState(0);
-
   const [activeSubtitle,   setActiveSubtitle]   = useState<string | null>(subtitles.length > 0 ? subtitles[0].lang : null);
   const [currentCue,       setCurrentCue]       = useState<string | null>(null);
   const [showSubMenu,      setShowSubMenu]      = useState(false);
   const [showSubSettings,  setShowSubSettings]  = useState(false);
   const [subStyle, setSubStyle] = useState<SubtitleStyle>(DEFAULT_SUB_STYLE);
 
-  useEffect(() => { setSubStyle(loadSubStyle()); }, []);
+  // Load saved subtitle prefs from cookie on mount
+  useEffect(() => {
+    setSubStyle(loadSubStyle());
+  }, []);
 
   const updateSubStyle = useCallback((updater: (prev: SubtitleStyle) => SubtitleStyle) => {
     setSubStyle(prev => {
@@ -92,8 +100,13 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       return next;
     });
   }, []);
+<<<<<<< HEAD
 
   // Detect mobile early via ref so preloader reads correct value on first render
+=======
+  const preloader = useVideoPreloader({ videoRef, src, enabled: true });
+
+>>>>>>> parent of 4061064 (video player fixed + time on hover)
   useEffect(() => {
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     isMobileRef.current = mobile;
@@ -154,6 +167,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     setTimeout(() => { isExternalRef.current = false; }, 100);
   }, [externalControl]);
 
+  // ── Stall/waiting state ──────────────────────────────────────────────────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -174,110 +188,54 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     if (!isExternalRef.current && onPlaybackEvent) onPlaybackEvent({ type, timestamp });
   }, [onPlaybackEvent]);
 
-  const togglePlay = useCallback(() => {
+  const togglePlay = () => {
     if (!videoRef.current) return;
-    const v = videoRef.current;
-    if (v.paused) {
-      const playPromise = v.play();
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          setIsPlaying(true);
-          emitEvent('play', v.currentTime);
-        }).catch(() => {});
-      }
-    } else {
-      v.pause();
-      setIsPlaying(false);
-      emitEvent('pause', v.currentTime);
-    }
-  }, [emitEvent]);
+    if (isPlaying) { videoRef.current.pause(); setIsPlaying(false); emitEvent('pause', videoRef.current.currentTime); }
+    else { videoRef.current.play().catch(() => {}); setIsPlaying(true); emitEvent('play', videoRef.current.currentTime); }
+  };
 
-  const getSeekTime = useCallback((clientX: number): number => {
-    if (!progressRef.current || !duration) return 0;
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+    if (!progressRef.current || !videoRef.current) return;
     const rect = progressRef.current.getBoundingClientRect();
-    return Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
-  }, [duration]);
-
-  const applySeek = useCallback((time: number) => {
-    if (!videoRef.current) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const time = Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
     videoRef.current.currentTime = time;
     setCurrentTime(time);
     emitEvent('seek', time);
-  }, [emitEvent]);
+  };
 
-  const handleProgressMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    isDraggingRef.current = true;
-    applySeek(getSeekTime(e.clientX));
-  }, [getSeekTime, applySeek]);
-
-  const handleProgressMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!progressRef.current || !duration) return;
-    const rect = progressRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    setHoverX(Math.max(0, Math.min(rect.width, x)));
-    setHoverTime(getSeekTime(e.clientX));
-    if (isDraggingRef.current) applySeek(getSeekTime(e.clientX));
-  }, [duration, getSeekTime, applySeek]);
-
-  const handleProgressMouseLeave = useCallback(() => {
-    setHoverTime(null);
-    isDraggingRef.current = false;
-  }, []);
-
-  const handleProgressMouseUp = useCallback(() => {
-    isDraggingRef.current = false;
-  }, []);
-
-  const handleProgressTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    isDraggingRef.current = true;
-    applySeek(getSeekTime(e.touches[0].clientX));
-  }, [getSeekTime, applySeek]);
-
-  const handleProgressTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (isDraggingRef.current) applySeek(getSeekTime(e.touches[0].clientX));
-  }, [getSeekTime, applySeek]);
-
-  const handleProgressTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    isDraggingRef.current = false;
-  }, []);
-
-  const skip = useCallback((s: number) => {
+  const skip = (s: number) => {
     if (!videoRef.current) return;
     const t = Math.max(0, Math.min(duration, videoRef.current.currentTime + s));
     videoRef.current.currentTime = t;
     emitEvent('seek', t);
-  }, [duration, emitEvent]);
+  };
 
-  const toggleMute = useCallback(() => {
+  const toggleMute = () => {
     if (!videoRef.current) return;
     videoRef.current.muted = !isMuted;
     setIsMuted(!isMuted);
-  }, [isMuted]);
+  };
 
-  const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     if (videoRef.current) { videoRef.current.volume = val; videoRef.current.muted = val === 0; }
     setVolume(val); setIsMuted(val === 0);
-  }, []);
+  };
 
-  const toggleFullscreen = useCallback(() => {
-    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const target = isIOS && videoRef.current ? videoRef.current : containerRef.current!;
-    if (!getFullscreenElement()) requestFullscreen(target);
-    else exitFullscreen();
-  }, []);
+  const toggleFullscreen = () => {
+    const target = isMobile && videoRef.current ? videoRef.current : containerRef.current!;
+    if (!getFullscreenElement()) { requestFullscreen(target); }
+    else { exitFullscreen(); }
+  };
 
-  const showControlsTemporarily = useCallback(() => {
+  const showControlsTemporarily = () => {
     setShowControls(true);
     if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
     if (isPlaying) hideTimeoutRef.current = setTimeout(() => setShowControls(false), 3000);
-  }, [isPlaying]);
+  };
 
-  const handleTap = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+  const handleTap = (e: React.TouchEvent<HTMLDivElement>) => {
     const now = Date.now();
     const timeSinceLast = now - lastTapRef.current;
     if (timeSinceLast < 300 && timeSinceLast > 0) {
@@ -288,13 +246,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       showControlsTemporarily();
     }
     lastTapRef.current = now;
-  }, [skip, showControlsTemporarily]);
-
-  useEffect(() => {
-    const onMouseUp = () => { isDraggingRef.current = false; };
-    window.addEventListener('mouseup', onMouseUp);
-    return () => window.removeEventListener('mouseup', onMouseUp);
-  }, []);
+  };
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -309,12 +261,11 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [togglePlay, skip, toggleMute, toggleFullscreen]);
+  }, [isPlaying, duration]);
 
   const subBottom = subStyle.position === 'bottom' ? (showControls ? '80px' : '20px') : undefined;
   const subTop    = subStyle.position === 'top' ? '20px' : undefined;
-  const progressPct = duration ? (currentTime / duration) * 100 : 0;
-  const bufferedPct = duration ? (buffered / duration) * 100 : 0;
+
 
   return (
     <div
@@ -331,45 +282,40 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         className="w-full h-full object-contain"
         onClick={isMobile ? undefined : togglePlay}
         preload="auto"
+<<<<<<< HEAD
         playsInline
+=======
+>>>>>>> parent of 4061064 (video player fixed + time on hover)
         onTimeUpdate={() => { if (videoRef.current) setCurrentTime(videoRef.current.currentTime); }}
         onLoadedMetadata={() => {
           if (videoRef.current) {
             setDuration(videoRef.current.duration);
-            if (initialTime && initialTime > 0) {
-              videoRef.current.currentTime = initialTime;
-              setCurrentTime(initialTime);
-            }
+            if (initialTime && initialTime > 0) { videoRef.current.currentTime = initialTime; setCurrentTime(initialTime); }
           }
         }}
         onProgress={() => {
-          const v = videoRef.current;
-          if (!v?.buffered.length) return;
-          for (let i = 0; i < v.buffered.length; i++) {
-            if (v.buffered.start(i) <= v.currentTime + 0.5 && v.buffered.end(i) > v.currentTime) {
-              setBuffered(v.buffered.end(i));
-              return;
-            }
-          }
-          setBuffered(v.buffered.end(v.buffered.length - 1));
+          if (videoRef.current?.buffered.length)
+            setBuffered(videoRef.current.buffered.end(videoRef.current.buffered.length - 1));
         }}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
         onEnded={() => setIsPlaying(false)}
+        playsInline
+        crossOrigin="anonymous"
       >
         {subtitles.map((t) => (
           <track key={t.lang} kind="subtitles" src={t.url} srcLang={t.lang} label={t.label} />
         ))}
       </video>
 
-      {/* Buffering spinner */}
+      {/* ── Buffering spinner ── */}
       {(isWaiting || preloader.isRecovering) && isPlaying && (
         <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
           <div className="w-12 h-12 rounded-full border-2 border-cinema-accent/30 border-t-cinema-accent animate-spin" />
         </div>
       )}
 
-      {/* Subtitles */}
+
+
+      {/* ── Subtitles ── */}
       {activeSubtitle && currentCue && (
         <div
           className="absolute left-1/2 -translate-x-1/2 z-20 text-center pointer-events-none transition-all duration-300 max-w-[85%]"
@@ -387,7 +333,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         </div>
       )}
 
-      {/* Center play button */}
+      {/* ── Center play button ── */}
       {!isPlaying && !isWaiting && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer z-10" onClick={togglePlay}>
           <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-cinema-accent/90 flex items-center justify-center shadow-2xl">
@@ -396,7 +342,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         </div>
       )}
 
-      {/* Controls overlay */}
+      {/* ── Controls overlay ── */}
       <div
         className={cn(
           'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent transition-opacity duration-500 z-30',
@@ -404,41 +350,22 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         )}
         style={{ padding: '0 12px 12px' }}
       >
-        {/* Progress bar */}
+        {/* Progress bar — multi-range buffered segments */}
         <div
           ref={progressRef}
           className="relative cursor-pointer mb-3 group/progress"
-          style={{ height: isMobile ? '28px' : '20px', display: 'flex', alignItems: 'center' }}
-          onMouseDown={handleProgressMouseDown}
-          onMouseMove={handleProgressMouseMove}
-          onMouseLeave={handleProgressMouseLeave}
-          onMouseUp={handleProgressMouseUp}
-          onTouchStart={handleProgressTouchStart}
-          onTouchMove={handleProgressTouchMove}
-          onTouchEnd={handleProgressTouchEnd}
+          style={{ height: isMobile ? '20px' : '12px', display: 'flex', alignItems: 'center' }}
+          onClick={handleSeek}
+          onTouchStart={handleSeek}
         >
-          {/* Hover time tooltip */}
-          {hoverTime !== null && !isMobile && (
-            <div
-              className="absolute bottom-full mb-2 -translate-x-1/2 bg-black/90 text-white text-xs font-mono px-2 py-1 rounded pointer-events-none z-50 whitespace-nowrap"
-              style={{ left: `${hoverX}px` }}
-            >
-              {formatDuration(hoverTime)}
+          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full overflow-hidden">
+            {/* Single buffered bar */}
+            <div className="absolute inset-y-0 left-0 bg-white/25 rounded-full" style={{ width: `${duration ? (buffered / duration) * 100 : 0}%` }} />
+            {/* Playhead */}
+            <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}>
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-cinema-accent shadow-lg" />
             </div>
-          )}
-
-          {/* Track */}
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full group-hover/progress:h-2 transition-all duration-150 overflow-hidden">
-            {/* Buffered */}
-            <div className="absolute inset-y-0 left-0 bg-white/30 rounded-full" style={{ width: `${bufferedPct}%` }} />
-            {/* Played */}
-            <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${progressPct}%` }} />
           </div>
-          {/* Thumb dot — sits outside overflow:hidden track */}
-          <div
-            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-cinema-accent shadow-lg opacity-0 group-hover/progress:opacity-100 transition-opacity duration-150 pointer-events-none"
-            style={{ left: `${progressPct}%` }}
-          />
         </div>
 
         {/* Controls row */}
@@ -456,11 +383,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
               <SkipForward className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
-            {isMobile ? (
-              <button onClick={toggleMute} className="text-white/70 hover:text-white transition-colors p-1">
-                {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-              </button>
-            ) : (
+            {!isMobile && (
               <div className="flex items-center gap-2 ml-1">
                 <button onClick={toggleMute} className="text-white/70 hover:text-white transition-colors">
                   {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
@@ -470,11 +393,13 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
             )}
 
             <span className="text-xs sm:text-sm text-white/70 font-mono ml-1 whitespace-nowrap">
-              {formatDuration(currentTime)} <span className="opacity-40">/</span> {formatDuration(duration)}
+              {formatDuration(currentTime)}<span className="hidden sm:inline"> / {formatDuration(duration)}</span>
             </span>
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+
+
             {subtitles.length > 0 && (
               <div className="relative">
                 <button
