@@ -39,7 +39,6 @@ interface VideoPlayerProps {
 const BG_MAP    = { black: 'rgba(0,0,0,0.85)', dark: 'rgba(0,0,0,0.45)', none: 'transparent' };
 const COLOR_MAP = { white: '#ffffff', yellow: '#fde68a', cyan: '#a5f3fc' };
 
-
 function requestFullscreen(el: HTMLElement) {
   if (el.requestFullscreen)               return el.requestFullscreen();
   if ((el as any).webkitRequestFullscreen) return (el as any).webkitRequestFullscreen();
@@ -60,8 +59,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const hideTimeoutRef = useRef<NodeJS.Timeout>();
   const isExternalRef  = useRef(false);
   const lastTapRef     = useRef<number>(0);
-  const isDraggingRef  = useRef(false);
-  const isMobileRef    = useRef(false);
 
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [currentTime,  setCurrentTime]  = useState(0);
@@ -74,13 +71,16 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [isMobile,     setIsMobile]     = useState(false);
   const [isWaiting,    setIsWaiting]    = useState(false);
 
+  // Hover time tooltip
+  const [hoverTime,    setHoverTime]    = useState<number | null>(null);
+  const [hoverX,       setHoverX]       = useState(0);
+
   const [activeSubtitle,   setActiveSubtitle]   = useState<string | null>(subtitles.length > 0 ? subtitles[0].lang : null);
   const [currentCue,       setCurrentCue]       = useState<string | null>(null);
   const [showSubMenu,      setShowSubMenu]      = useState(false);
   const [showSubSettings,  setShowSubSettings]  = useState(false);
   const [subStyle, setSubStyle] = useState<SubtitleStyle>(DEFAULT_SUB_STYLE);
 
-  // Load saved subtitle prefs from cookie on mount
   useEffect(() => {
     setSubStyle(loadSubStyle());
   }, []);
@@ -93,14 +93,12 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     });
   }, []);
 
-  // Detect mobile early via ref so preloader reads correct value on first render
+  const preloader = useVideoPreloader({ videoRef, src, enabled: true });
+
   useEffect(() => {
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    isMobileRef.current = mobile;
     setIsMobile(mobile);
   }, []);
-
-  const preloader = useVideoPreloader({ videoRef, src, enabled: !isMobileRef.current });
 
   useEffect(() => {
     const update = () => setIsFullscreen(!!getFullscreenElement());
@@ -154,7 +152,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     setTimeout(() => { isExternalRef.current = false; }, 100);
   }, [externalControl]);
 
-  // ── Stall/waiting state ──────────────────────────────────────────────────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -189,6 +186,15 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     videoRef.current.currentTime = time;
     setCurrentTime(time);
     emitEvent('seek', time);
+  };
+
+  const handleProgressMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!progressRef.current || !duration) return;
+    const rect = progressRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, x / rect.width));
+    setHoverTime(pct * duration);
+    setHoverX(x);
   };
 
   const skip = (s: number) => {
@@ -252,7 +258,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
 
   const subBottom = subStyle.position === 'bottom' ? (showControls ? '80px' : '20px') : undefined;
   const subTop    = subStyle.position === 'top' ? '20px' : undefined;
-
 
   return (
     <div
@@ -338,9 +343,23 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           style={{ height: isMobile ? '20px' : '12px', display: 'flex', alignItems: 'center' }}
           onClick={handleSeek}
           onTouchStart={handleSeek}
+          onMouseMove={handleProgressMouseMove}
+          onMouseLeave={() => setHoverTime(null)}
         >
+          {/* Hover time tooltip */}
+          {hoverTime !== null && (
+            <div
+              className="absolute -top-8 pointer-events-none z-50"
+              style={{ left: hoverX, transform: 'translateX(-50%)' }}
+            >
+              <span className="bg-black/80 text-white text-xs font-mono px-1.5 py-0.5 rounded whitespace-nowrap">
+                {formatDuration(hoverTime)}
+              </span>
+            </div>
+          )}
+
           <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full overflow-hidden">
-            {/* Single buffered bar */}
+            {/* Buffered bar */}
             <div className="absolute inset-y-0 left-0 bg-white/25 rounded-full" style={{ width: `${duration ? (buffered / duration) * 100 : 0}%` }} />
             {/* Playhead */}
             <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}>
