@@ -14,7 +14,7 @@ const supabaseAdmin = createClient(
 );
 
 // ── HMAC secret cache (avoid hitting Supabase on every request) ─────────────
-let _cachedSecret: string | null = null;
+let _cachedSecret = '';
 let _cachedAt = 0;
 const CACHE_TTL_MS = 30_000; // 30 seconds
 
