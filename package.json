@@ -9,6 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@azure/arm-containerinstance": "^9.1.0",
+    "@azure/identity": "^4.13.0",
     "@azure/storage-blob": "12.24.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@supabase/ssr": "^0.1.0",

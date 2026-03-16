@@ -540,6 +540,68 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.watch_invites;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.torrent_jobs;
 
 
+CREATE TABLE container_state (
+  id                  INTEGER PRIMARY KEY DEFAULT 1,
+  container_ip        TEXT,
+  container_starting  BOOLEAN DEFAULT false,
+  updated_at          TIMESTAMPTZ DEFAULT now(),
+  CONSTRAINT single_row CHECK (id = 1)
+);
+
+-- Insert the single row
+INSERT INTO container_state (id, container_ip, container_starting)
+VALUES (1, null, false);
+
+-- No RLS needed — only service_role touches this table
+ALTER TABLE container_state ENABLE ROW LEVEL SECURITY;
+
+
+CREATE TABLE ingest_jobs (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  hash              TEXT NOT NULL,
+  movie_name        TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'pending',
+  error             TEXT,
+  started_at        TIMESTAMPTZ,
+  finished_at       TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ DEFAULT now(),
+
+  CONSTRAINT valid_status CHECK (
+    status IN (
+      'pending',
+      'submitted',
+      'queued',
+      'running',
+      'uploading',
+      'completed',
+      'failed',
+      'cancelled'
+    )
+  )
+);
+
+-- Index for fast per-user active job lookups
+CREATE INDEX ingest_jobs_user_id_status_idx ON ingest_jobs (user_id, status);
+
+-- Enable RLS
+ALTER TABLE ingest_jobs ENABLE ROW LEVEL SECURITY;
+
+-- Users can only see their own jobs
+CREATE POLICY "users can view own jobs"
+  ON ingest_jobs
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+-- Users can insert their own jobs
+CREATE POLICY "users can insert own jobs"
+  ON ingest_jobs
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+-- Service role bypasses RLS automatically (Python container uses this)
+
 -- ============================================================
 -- DONE ✅
 -- ============================================================
@@ -547,3 +609,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.torrent_jobs;
 --   UPDATE public.profiles SET role = 'admin', status = 'approved'
 --   WHERE user_id = 'YOUR_USER_ID_HERE';
 -- ============================================================
+
+
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+UPDATE container_state SET container_ip = NULL, container_starting = false WHERE id = 1;

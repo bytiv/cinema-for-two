@@ -10,12 +10,11 @@ import { cn } from '@/lib/utils';
 import { formatFileSize, generateBlobName, getVideoMimeType, formatDuration } from '@/lib/utils';
 import { VideoQuality } from '@/types';
 import type { TorrentJob } from '@/types';
-// import DurationInput from '@/components/ui/DurationInput';
 import {
   Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle,
-  Plus, Globe, Gauge, Clock, Hash, Magnet, ChevronDown, ChevronUp,
-  Download, HardDrive, Users, Zap, Ban, Loader2,
-  ArrowRight, AlertTriangle, FolderOpen,
+  Plus, Globe, Gauge, Clock, Hash, Magnet, Download, HardDrive,
+  Users, Zap, Ban, Loader2, ArrowRight, AlertTriangle, FolderOpen,
+  Server, Wifi, WifiOff,
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────
@@ -52,6 +51,31 @@ const QUALITY_OPTIONS: { value: VideoQuality; label: string; desc: string }[] = 
 type Tab = 'direct' | 'torrent' | 'jobs';
 
 // ─────────────────────────────────────────────────────────────
+// Submit phase — shown instead of the spinner label
+// ─────────────────────────────────────────────────────────────
+
+type SubmitPhase =
+  | 'idle'
+  | 'uploading-poster'   // uploading poster to Azure
+  | 'uploading-subs'     // uploading subtitles to Azure
+  | 'service-check'      // checking if container is alive
+  | 'service-starting'   // container is cold — starting up
+  | 'service-connecting' // container started, waiting for health
+  | 'submitting'         // sending job to Python
+  | 'done';
+
+const PHASE_LABELS: Record<SubmitPhase, string> = {
+  idle:                '',
+  'uploading-poster':  'Uploading poster...',
+  'uploading-subs':    'Uploading subtitles...',
+  'service-check':     'Checking service status...',
+  'service-starting':  'Starting up the service...',
+  'service-connecting':'Connecting you to the server...',
+  submitting:          'Preparing your request...',
+  done:                'Done!',
+};
+
+// ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
 
@@ -60,13 +84,18 @@ interface SubtitleEntry {
 }
 
 interface ActiveJob {
-  jobId:       string;
-  title:       string;
-  hash:        string;
-  job:         TorrentJob | null;
-  streamMeta:  { description?: string; quality?: string; posterUrl?: string; subtitles?: { label: string; lang: string; url: string }[] };
-  startedAt:   number;
-  movieId?:    string;
+  jobId:      string;
+  title:      string;
+  hash:       string;
+  job:        TorrentJob | null;
+  streamMeta: {
+    description?: string;
+    quality?:     string;
+    posterUrl?:   string;
+    subtitles?:   { label: string; lang: string; url: string }[];
+  };
+  startedAt:  number;
+  movieId?:   string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -76,10 +105,11 @@ interface ActiveJob {
 const TERMINAL = new Set(['Ready', 'Failed', 'Cancelled']);
 
 function stageColor(stage: string) {
-  if (stage === 'Ready')       return 'text-cinema-success bg-cinema-success/10 border-cinema-success/20';
-  if (stage === 'Failed')      return 'text-cinema-error bg-cinema-error/10 border-cinema-error/20';
-  if (stage === 'Cancelled')   return 'text-cinema-text-dim bg-cinema-card border-cinema-border';
+  if (stage === 'Ready')                return 'text-cinema-success bg-cinema-success/10 border-cinema-success/20';
+  if (stage === 'Failed')               return 'text-cinema-error bg-cinema-error/10 border-cinema-error/20';
+  if (stage === 'Cancelled')            return 'text-cinema-text-dim bg-cinema-card border-cinema-border';
   if (stage === 'Uploading to storage') return 'text-cinema-warm bg-cinema-warm/10 border-cinema-warm/20';
+  if (stage === 'Queued')               return 'text-cinema-text-muted bg-cinema-surface border-cinema-border';
   return 'text-cinema-secondary bg-cinema-secondary/10 border-cinema-secondary/20';
 }
 
@@ -89,18 +119,52 @@ function stageIcon(stage: string) {
   if (stage === 'Cancelled')              return <Ban className="w-3.5 h-3.5" />;
   if (stage === 'Uploading to storage')   return <HardDrive className="w-3.5 h-3.5" />;
   if (stage === 'Downloading to servers') return <Download className="w-3.5 h-3.5" />;
+  if (stage === 'Queued')                 return <Clock className="w-3.5 h-3.5" />;
   return <Loader2 className="w-3.5 h-3.5 animate-spin" />;
 }
 
-function buildStreamUrl(jobId: string, meta: ActiveJob['streamMeta'] & { title: string }) {
-  const p = new URLSearchParams({ title: meta.title });
-  if (meta.description) p.set('description', meta.description);
-  if (meta.quality)     p.set('quality',     meta.quality);
-  if (meta.posterUrl)   p.set('posterUrl',   meta.posterUrl);
-  if (meta.subtitles && meta.subtitles.length > 0) {
-    p.set('subtitles', JSON.stringify(meta.subtitles));
-  }
-  return `/api/ingest/${jobId}/stream?${p.toString()}`;
+// ─────────────────────────────────────────────────────────────
+// Sub-component: Submit phase banner
+// ─────────────────────────────────────────────────────────────
+
+function SubmitPhaseBanner({ phase }: { phase: SubmitPhase }) {
+  if (phase === 'idle' || phase === 'done') return null;
+
+  const isServicePhase = phase === 'service-check' || phase === 'service-starting' || phase === 'service-connecting';
+
+  return (
+    <div className={cn(
+      'flex items-center gap-3 p-4 rounded-xl border transition-all duration-300',
+      isServicePhase
+        ? 'bg-cinema-secondary/8 border-cinema-secondary/20'
+        : 'bg-cinema-accent/8 border-cinema-accent/20',
+    )}>
+      <div className="flex-shrink-0">
+        {phase === 'service-starting'   && <Server className="w-4 h-4 text-cinema-secondary animate-pulse" />}
+        {phase === 'service-connecting' && <Wifi   className="w-4 h-4 text-cinema-secondary animate-pulse" />}
+        {phase === 'service-check'      && <Loader2 className="w-4 h-4 text-cinema-secondary animate-spin" />}
+        {!isServicePhase                && <Loader2 className="w-4 h-4 text-cinema-accent animate-spin" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className={cn(
+          'text-sm font-medium',
+          isServicePhase ? 'text-cinema-secondary' : 'text-cinema-accent',
+        )}>
+          {PHASE_LABELS[phase]}
+        </p>
+        {phase === 'service-starting' && (
+          <p className="text-xs text-cinema-text-dim mt-0.5">
+            This takes about 20–30 seconds on a cold start
+          </p>
+        )}
+        {phase === 'service-connecting' && (
+          <p className="text-xs text-cinema-text-dim mt-0.5">
+            Almost there — running health checks
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -117,14 +181,16 @@ function JobCard({
   onGoToMovie: (movieId: string) => void;
 }) {
   const { job, title, hash } = activeJob;
-  const stage = job?.stage ?? 'Queued';
+  const stage      = job?.stage ?? 'Queued';
   const isTerminal = TERMINAL.has(stage);
+  const isQueued   = stage === 'Queued';
 
   return (
     <div className={cn(
       'rounded-2xl border bg-cinema-card/60 backdrop-blur-sm overflow-hidden transition-all duration-300',
       stage === 'Ready'  ? 'border-cinema-success/30' :
-      stage === 'Failed' ? 'border-cinema-error/30'   : 'border-cinema-border',
+      stage === 'Failed' ? 'border-cinema-error/30'   :
+      isQueued           ? 'border-cinema-border/60'  : 'border-cinema-border',
     )}>
       {/* Header */}
       <div className="flex items-start justify-between gap-3 p-4 pb-3">
@@ -141,6 +207,16 @@ function JobCard({
         </span>
       </div>
 
+      {/* Queued notice */}
+      {isQueued && (
+        <div className="mx-4 mb-3 flex items-start gap-2.5 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
+          <Clock className="w-4 h-4 text-cinema-text-dim flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-cinema-text-muted leading-relaxed">
+            Your download is queued — it will start automatically once a slot is free.
+          </p>
+        </div>
+      )}
+
       {/* Warning banner */}
       {job?.warning && (
         <div className="mx-4 mb-3 flex items-start gap-2.5 p-3 rounded-xl bg-cinema-warm/8 border border-cinema-warm/20">
@@ -150,12 +226,12 @@ function JobCard({
       )}
 
       {/* Notification */}
-      {job?.notification && (
+      {job?.notification && !isQueued && (
         <p className="px-4 pb-3 text-sm text-cinema-text-muted">{job.notification}</p>
       )}
 
       {/* Progress bars */}
-      {job && !isTerminal && (
+      {job && !isTerminal && !isQueued && (
         <div className="px-4 pb-3 space-y-3">
           {/* Download */}
           <div className="space-y-1.5">
@@ -165,7 +241,11 @@ function JobCard({
               </span>
               <div className="flex items-center gap-3 text-cinema-text-muted">
                 {job.download_speed && <span>{job.download_speed}</span>}
-                {job.download_eta   && <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{job.download_eta}</span>}
+                {job.download_eta   && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />{job.download_eta}
+                  </span>
+                )}
                 {job.seeder_count != null && job.download_percent < 100 && (
                   <span className={cn(
                     'flex items-center gap-1',
@@ -220,7 +300,7 @@ function JobCard({
         )}
         {stage === 'Failed' && (
           <p className="text-xs text-cinema-error flex items-center gap-1.5 flex-1">
-            <AlertCircle className="w-3.5 h-3.5" /> {job?.error_code ?? 'unknown_error'}
+            <AlertCircle className="w-3.5 h-3.5" /> {job?.error ?? 'Unknown error'}
           </p>
         )}
         {!isTerminal && (
@@ -243,72 +323,70 @@ function JobCard({
 // ─────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
-  const router  = useRouter();
+  const router   = useRouter();
   const supabase = createClient();
 
   // ── Tab state ──────────────────────────────────────────────
   const [tab, setTab] = useState<Tab>('direct');
 
   // ── Direct upload state ────────────────────────────────────
-  const [movieFile,       setMovieFile]       = useState<File | null>(null);
-  const [posterFile,      setPosterFile]      = useState<File | null>(null);
-  const [posterPreview,   setPosterPreview]   = useState<string | null>(null);
-  const [title,           setTitle]           = useState('');
-  const [description,     setDescription]     = useState('');
-  const [quality,         setQuality]         = useState<VideoQuality | null>(null);
-  const [duration,        setDuration]        = useState<number | null>(null);
-  const [detectedDuration,setDetectedDuration]= useState<number | null>(null);
-  const [subtitleEntries, setSubtitleEntries] = useState<SubtitleEntry[]>([]);
-  const [uploading,       setUploading]       = useState(false);
-  const [uploadProgress,  setUploadProgress]  = useState(0);
-  const [uploadStage,     setUploadStage]     = useState('');
-  const [directError,     setDirectError]     = useState('');
-  const [dragActive,      setDragActive]      = useState(false);
+  const [movieFile,        setMovieFile]        = useState<File | null>(null);
+  const [posterFile,       setPosterFile]       = useState<File | null>(null);
+  const [posterPreview,    setPosterPreview]    = useState<string | null>(null);
+  const [title,            setTitle]            = useState('');
+  const [description,      setDescription]      = useState('');
+  const [quality,          setQuality]          = useState<VideoQuality | null>(null);
+  const [duration,         setDuration]         = useState<number | null>(null);
+  const [detectedDuration, setDetectedDuration] = useState<number | null>(null);
+  const [subtitleEntries,  setSubtitleEntries]  = useState<SubtitleEntry[]>([]);
+  const [uploading,        setUploading]        = useState(false);
+  const [uploadProgress,   setUploadProgress]   = useState(0);
+  const [uploadStage,      setUploadStage]      = useState('');
+  const [directError,      setDirectError]      = useState('');
+  const [dragActive,       setDragActive]       = useState(false);
 
   // ── Torrent state ──────────────────────────────────────────
-  const [hashInput,          setHashInput]          = useState('');
-  const [torrentTitle,       setTorrentTitle]       = useState('');
-  const [torrentDesc,        setTorrentDesc]        = useState('');
-  const [torrentQuality,     setTorrentQuality]     = useState<VideoQuality | null>(null);
-  const [torrentSubtitles,   setTorrentSubtitles]   = useState<SubtitleEntry[]>([]);
-  const [torrentPosterFile,  setTorrentPosterFile]  = useState<File | null>(null);
+  const [hashInput,            setHashInput]            = useState('');
+  const [torrentTitle,         setTorrentTitle]         = useState('');
+  const [torrentDesc,          setTorrentDesc]          = useState('');
+  const [torrentQuality,       setTorrentQuality]       = useState<VideoQuality | null>(null);
+  const [torrentSubtitles,     setTorrentSubtitles]     = useState<SubtitleEntry[]>([]);
+  const [torrentPosterFile,    setTorrentPosterFile]    = useState<File | null>(null);
   const [torrentPosterPreview, setTorrentPosterPreview] = useState<string | null>(null);
-  const [torrentError,       setTorrentError]       = useState('');
-  const [submitting,         setSubmitting]         = useState(false);
+  const [torrentError,         setTorrentError]         = useState('');
+  const [submitPhase,          setSubmitPhase]          = useState<SubmitPhase>('idle');
 
   // ── Active jobs state ──────────────────────────────────────
-  const [activeJobs,    setActiveJobs]    = useState<ActiveJob[]>([]);
+  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const esRefs = useRef<Record<string, EventSource>>({});
 
-  // ── Load persisted jobs from Supabase on mount ─────────────
+  // ── Restore in-progress jobs from Supabase on mount ───────
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
       const { data: rows } = await supabase
-        .from('torrent_jobs')
+        .from('ingest_jobs')
         .select('*')
-        .eq('requested_by', user.id)
-        .not('stage', 'in', '("Ready","Failed","Cancelled")')
-        .order('started_at', { ascending: false });
+        .eq('user_id', user.id)
+        .in('status', ['submitted', 'queued', 'running', 'uploading'])
+        .order('created_at', { ascending: false });
 
       if (!rows?.length) return;
 
       const restored: ActiveJob[] = rows.map((r) => ({
-        jobId:      r.job_id,
-        title:      r.file_name ?? r.job_id,
-        hash:       r.info_hash,
-        job:        r as unknown as TorrentJob,
+        jobId:      r.id,
+        title:      r.movie_name,
+        hash:       r.hash,
+        job:        null,
         streamMeta: {},
-        startedAt:  new Date(r.started_at).getTime(),
-        movieId:    r.movie_id ?? undefined,
+        startedAt:  new Date(r.created_at).getTime(),
+        movieId:    undefined,
       }));
 
       setActiveJobs(restored);
       setTab('jobs');
-
-      // Re-attach SSE for each in-progress job
       restored.forEach((aj) => _attachStream(aj.jobId, aj.title, aj.streamMeta));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -325,14 +403,14 @@ export default function UploadPage() {
   // SSE stream attachment
   // ─────────────────────────────────────────────────────────
   function _attachStream(
-    jobId:     string,
-    title:     string,
-    meta:      ActiveJob['streamMeta'],
+    jobId: string,
+    title: string,
+    meta:  ActiveJob['streamMeta'],
   ) {
-    if (esRefs.current[jobId]) return; // already attached
+    if (esRefs.current[jobId]) return;
 
-    const url = buildStreamUrl(jobId, { title, ...meta });
-    const es  = new EventSource(url);
+    // Stream goes through our Next.js proxy route from Stage 4
+    const es = new EventSource(`/api/ingest/status/${jobId}/stream`);
     esRefs.current[jobId] = es;
 
     es.onmessage = (e) => {
@@ -348,7 +426,6 @@ export default function UploadPage() {
         if (TERMINAL.has(job.stage)) {
           es.close();
           delete esRefs.current[jobId];
-          // Auto-switch to jobs tab so user sees the result
           setTab('jobs');
         }
       } catch {}
@@ -361,20 +438,53 @@ export default function UploadPage() {
   }
 
   // ─────────────────────────────────────────────────────────
-  // Torrent submit
+  // Subtitle helpers
+  // ─────────────────────────────────────────────────────────
+  const srtToVtt = async (file: File): Promise<Blob> => {
+    const text = await file.text();
+    const vtt  = 'WEBVTT\n\n' + text.replace(/\r\n/g, '\n').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    return new Blob([vtt], { type: 'text/vtt' });
+  };
+
+  const uploadSubtitleFile = async (entry: SubtitleEntry, userId: string) => {
+    const baseName = entry.file.name.replace(/\.(srt|vtt)$/i, '');
+    const blobName = `${userId}/${Date.now()}-${baseName}.vtt`;
+    const sasRes   = await fetch('/api/upload/sas', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ container: 'subtitles', blobName, contentType: 'text/vtt' }),
+    });
+    if (!sasRes.ok) throw new Error('Failed to get subtitle upload URL');
+    const { uploadUrl, readUrl } = await sasRes.json();
+    const body = entry.file.name.toLowerCase().endsWith('.srt') ? await srtToVtt(entry.file) : entry.file;
+    await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'text/vtt', 'Content-Length': String(body instanceof Blob ? body.size : (body as File).size) },
+      body,
+    });
+    return { label: entry.label, lang: entry.lang, url: readUrl };
+  };
+
+  const updateSubtitleLang = (id: string, lang: string, setter = setSubtitleEntries) => {
+    const opt = LANGUAGE_OPTIONS.find((l) => l.code === lang);
+    setter((prev) => prev.map((s) => s.id === id ? { ...s, lang, label: opt?.label || lang } : s));
+  };
+
+  // ─────────────────────────────────────────────────────────
+  // Torrent submit — new flow
   // ─────────────────────────────────────────────────────────
   const handleTorrentSubmit = async () => {
     if (!hashInput.trim() || !torrentTitle.trim()) return;
-    setSubmitting(true);
+    setSubmitPhase('idle');
     setTorrentError('');
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // ── 1. Upload poster if provided ─────────────────────────
+      // ── 1. Upload poster ────────────────────────────────────
       let posterUrl: string | undefined;
       if (torrentPosterFile) {
+        setSubmitPhase('uploading-poster');
         const posterName   = generateBlobName(user.id, torrentPosterFile.name);
         const posterSasRes = await fetch('/api/upload/sas', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -390,55 +500,88 @@ export default function UploadPage() {
         posterUrl = pReadUrl;
       }
 
-      // ── 1b. Upload subtitles now — before the job starts ────
-      // File objects can't be serialised or sent to the server later,
-      // so we upload them to Azure here and store the resulting URLs.
+      // ── 2. Upload subtitles ─────────────────────────────────
       let uploadedSubtitles: { label: string; lang: string; url: string }[] = [];
       if (torrentSubtitles.length > 0) {
+        setSubmitPhase('uploading-subs');
         uploadedSubtitles = await Promise.all(
-          torrentSubtitles.map((s) => uploadSubtitleFile(s, user.id))
+          torrentSubtitles.map((s) => uploadSubtitleFile(s, user.id)),
         );
       }
 
-      // ── 2. Start the ingest job ──────────────────────────────
-      const name = torrentTitle.trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
+      // ── 3. Build slug + blob base name ──────────────────────
+      const slug         = torrentTitle.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const blobBaseName = `${user.id}/${Date.now()}-${slug}`;
 
-      const res = await fetch('/api/ingest/start', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          hash:        hashInput.trim(),
-          name,
-          title:       torrentTitle.trim(),
-          description: torrentDesc.trim() || undefined,
-          quality:     torrentQuality ?? undefined,
-          posterUrl,
-        }),
-      });
+      // ── 4. Submit to /api/ingest/submit (Stage 4 route) ────
+      //    This route handles ensure-container internally and
+      //    emits phase info we can simulate on the client side.
+      //    We show service-check → service-starting → submitting
+      //    based on timing since we can't stream the phase from
+      //    a non-SSE POST response.
+      setSubmitPhase('service-check');
 
-      if (!res.ok) {
-        const body = await res.json();
-        throw new Error(body.error ?? 'Failed to start ingest');
+      // After 2s with no response, assume container is starting
+      const phaseTimer = setTimeout(() => setSubmitPhase('service-starting'), 2_000);
+      const connectTimer = setTimeout(() => setSubmitPhase('service-connecting'), 15_000);
+
+      let jobId: string;
+      try {
+        const res = await fetch('/api/ingest/submit', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            hash:           hashInput.trim(),
+            movie_name:     torrentTitle.trim(),
+            blob_base_name: blobBaseName,
+            metadata: {
+              description: torrentDesc.trim() || undefined,
+              quality:     torrentQuality ?? undefined,
+              posterUrl,
+              subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
+            },
+          }),
+        });
+
+        clearTimeout(phaseTimer);
+        clearTimeout(connectTimer);
+
+        if (!res.ok) {
+          const body = await res.json();
+          throw new Error(body.error ?? 'Failed to start ingest');
+        }
+
+        const data = await res.json();
+        jobId = data.job_id;
+      } catch (err) {
+        clearTimeout(phaseTimer);
+        clearTimeout(connectTimer);
+        throw err;
       }
 
-      const { jobId, meta } = await res.json();
-      const streamMeta = { ...meta, subtitles: uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined };
+      setSubmitPhase('submitting');
+
+      // ── 5. Add to active jobs + attach SSE ─────────────────
+      const streamMeta = {
+        description: torrentDesc.trim() || undefined,
+        quality:     torrentQuality ?? undefined,
+        posterUrl,
+        subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
+      };
 
       const newJob: ActiveJob = {
         jobId,
-        title:      torrentTitle.trim(),
-        hash:       hashInput.trim(),
-        job:        null,
+        title:     torrentTitle.trim(),
+        hash:      hashInput.trim(),
+        job:       null,
         streamMeta,
-        startedAt:  Date.now(),
+        startedAt: Date.now(),
       };
 
       setActiveJobs((prev) => [newJob, ...prev]);
       _attachStream(jobId, torrentTitle.trim(), streamMeta);
 
+      // ── 6. Reset form ───────────────────────────────────────
       setHashInput('');
       setTorrentTitle('');
       setTorrentDesc('');
@@ -446,21 +589,24 @@ export default function UploadPage() {
       setTorrentSubtitles([]);
       setTorrentPosterFile(null);
       setTorrentPosterPreview(null);
+      setSubmitPhase('done');
       setTab('jobs');
 
     } catch (err: any) {
       setTorrentError(err.message ?? 'Something went wrong');
-    } finally {
-      setSubmitting(false);
+      setSubmitPhase('idle');
     }
   };
+
+  const isSubmitting = submitPhase !== 'idle' && submitPhase !== 'done';
 
   // ─────────────────────────────────────────────────────────
   // Cancel job
   // ─────────────────────────────────────────────────────────
   const handleCancel = async (jobId: string) => {
     try {
-      await fetch(`/api/ingest/${jobId}`, { method: 'DELETE' });
+      // Stage 4 cancel proxy route
+      await fetch(`/api/ingest/cancel/${jobId}`, { method: 'DELETE' });
       esRefs.current[jobId]?.close();
       delete esRefs.current[jobId];
       setActiveJobs((prev) =>
@@ -474,7 +620,7 @@ export default function UploadPage() {
   };
 
   // ─────────────────────────────────────────────────────────
-  // Direct upload helpers (unchanged logic, kept intact)
+  // Direct upload helpers (unchanged)
   // ─────────────────────────────────────────────────────────
   const detectDuration = useCallback((file: File) => {
     const url   = URL.createObjectURL(file);
@@ -534,31 +680,6 @@ export default function UploadPage() {
     });
     setSubtitleEntries((prev) => [...prev, ...newEntries]);
     e.target.value = '';
-  };
-
-  const updateSubtitleLang = (id: string, lang: string, setter = setSubtitleEntries) => {
-    const opt = LANGUAGE_OPTIONS.find((l) => l.code === lang);
-    setter((prev) => prev.map((s) => s.id === id ? { ...s, lang, label: opt?.label || lang } : s));
-  };
-
-  const srtToVtt = async (file: File): Promise<Blob> => {
-    const text = await file.text();
-    const vtt  = 'WEBVTT\n\n' + text.replace(/\r\n/g, '\n').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
-    return new Blob([vtt], { type: 'text/vtt' });
-  };
-
-  const uploadSubtitleFile = async (entry: SubtitleEntry, userId: string) => {
-    const baseName = entry.file.name.replace(/\.(srt|vtt)$/i, '');
-    const blobName = `${userId}/${Date.now()}-${baseName}.vtt`;
-    const sasRes   = await fetch('/api/upload/sas', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ container: 'subtitles', blobName, contentType: 'text/vtt' }),
-    });
-    if (!sasRes.ok) throw new Error('Failed to get subtitle upload URL');
-    const { uploadUrl, readUrl } = await sasRes.json();
-    const body = entry.file.name.toLowerCase().endsWith('.srt') ? await srtToVtt(entry.file) : entry.file;
-    await fetch(uploadUrl, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'text/vtt', 'Content-Length': String(body instanceof Blob ? body.size : (body as File).size) }, body });
-    return { label: entry.label, lang: entry.lang, url: readUrl };
   };
 
   const handleDirectUpload = async () => {
@@ -621,7 +742,7 @@ export default function UploadPage() {
         poster_url: posterBlobName ? `https://${process.env.NEXT_PUBLIC_AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/posters/${posterBlobName}` : null,
         file_size: movieFile.size, format: movieFile.name.split('.').pop()?.toLowerCase() || 'mp4',
         quality: quality || null, duration: duration || null,
-        uploaded_by: (await supabase.auth.getUser()).data.user!.id,
+        uploaded_by: user.id,
         subtitles: subtitleData,
         ingest_method: 'direct_upload',
       };
@@ -660,9 +781,9 @@ export default function UploadPage() {
         {/* Tab switcher */}
         <div className="flex items-center gap-1 p-1 rounded-2xl bg-cinema-card/60 border border-cinema-border backdrop-blur-sm mb-6">
           {([
-            { id: 'direct',  icon: <Upload className="w-4 h-4" />,      label: 'Upload File'         },
-            { id: 'torrent', icon: <Magnet className="w-4 h-4" />,      label: 'Torrent / Hash'      },
-            { id: 'jobs',    icon: <FolderOpen className="w-4 h-4" />,  label: 'Active Jobs', badge: activeCount },
+            { id: 'direct',  icon: <Upload className="w-4 h-4" />,     label: 'Upload File'    },
+            { id: 'torrent', icon: <Magnet className="w-4 h-4" />,     label: 'Torrent / Hash' },
+            { id: 'jobs',    icon: <FolderOpen className="w-4 h-4" />, label: 'Active Jobs', badge: activeCount },
           ] as { id: Tab; icon: React.ReactNode; label: string; badge?: number }[]).map(({ id, icon, label, badge }) => (
             <button
               key={id}
@@ -759,7 +880,6 @@ export default function UploadPage() {
                   ))}
                 </div>
               </div>
-              {/* <DurationInput value={duration} onChange={setDuration} detected={detectedDuration} /> */}
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-cinema-text-muted">Poster Image (optional)</label>
                 <div className="flex items-start gap-4">
@@ -815,7 +935,6 @@ export default function UploadPage() {
               )}
             </div>
 
-            {/* Error */}
             {directError && (
               <div className="flex items-center gap-3 p-4 rounded-xl bg-cinema-error/10 border border-cinema-error/20">
                 <AlertCircle className="w-5 h-5 text-cinema-error flex-shrink-0" />
@@ -823,7 +942,6 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Progress */}
             {uploading && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">
@@ -859,7 +977,6 @@ export default function UploadPage() {
                   rows={3}
                   className="w-full rounded-xl bg-cinema-card border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all resize-none font-mono text-sm"
                 />
-                {/* Hash preview badge */}
                 {hashInput.trim() && (
                   <div className="flex items-center gap-2 mt-1">
                     {hashInput.trim().toLowerCase().startsWith('magnet:') ? (
@@ -939,7 +1056,6 @@ export default function UploadPage() {
                   <p className="text-xs text-cinema-text-dim mt-2">Uploaded to your library before the download starts. JPG, PNG, or WebP under 10MB.</p>
                 </div>
               </div>
-
             </div>
 
             {/* Subtitles */}
@@ -987,7 +1103,7 @@ export default function UploadPage() {
               )}
             </div>
 
-            {/* Info callout */}
+            {/* How it works */}
             <div className="flex items-start gap-3 p-4 rounded-xl bg-cinema-secondary/8 border border-cinema-secondary/20">
               <Zap className="w-4 h-4 text-cinema-secondary flex-shrink-0 mt-0.5" />
               <div className="text-xs text-cinema-text-dim space-y-1">
@@ -995,6 +1111,9 @@ export default function UploadPage() {
                 <p>We download the torrent on our servers and store it directly in your movie library. You can close this page — the job runs in the background and will be waiting for you in <strong className="text-cinema-text">Active Jobs</strong>.</p>
               </div>
             </div>
+
+            {/* Submit phase banner — shows service startup messages */}
+            <SubmitPhaseBanner phase={submitPhase} />
 
             {/* Error */}
             {torrentError && (
@@ -1006,13 +1125,13 @@ export default function UploadPage() {
 
             <Button
               onClick={handleTorrentSubmit}
-              disabled={!hashInput.trim() || !torrentTitle.trim() || submitting}
-              loading={submitting}
+              disabled={!hashInput.trim() || !torrentTitle.trim() || isSubmitting}
+              loading={isSubmitting}
               size="lg"
               className="w-full"
-              icon={<Download className="w-5 h-5" />}
+              icon={isSubmitting ? undefined : <Download className="w-5 h-5" />}
             >
-              {submitting ? 'Starting...' : 'Start Download'}
+              {isSubmitting ? PHASE_LABELS[submitPhase] : 'Start Download'}
             </Button>
           </div>
         )}
@@ -1038,7 +1157,6 @@ export default function UploadPage() {
                     {activeJobs.length} job{activeJobs.length !== 1 ? 's' : ''}
                     {activeCount > 0 && <span className="text-cinema-secondary ml-1.5">· {activeCount} running</span>}
                   </p>
-                  {/* Remove finished jobs */}
                   {activeJobs.some((j) => j.job && TERMINAL.has(j.job.stage)) && (
                     <button
                       onClick={() => setActiveJobs((p) => p.filter((j) => !j.job || !TERMINAL.has(j.job.stage)))}

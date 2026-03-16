@@ -1,32 +1,18 @@
 /**
  * Server-side client for the Python Media Ingest API.
- *
- * Security model
- * ──────────────
- * • Every request is signed with a short-lived HMAC-HS256 JWT so the
- *   Python container can verify the call genuinely came from this app.
- * • Azure storage credentials travel in the signed request body — the
- *   container reads them per-job and never has them as env vars.
- * • The HMAC secret is the only thing that needs to be in the container's
- *   environment. Everything else is sent by Next.js at job-start time.
- *
- * Never import this from a client component.
+ * IP is resolved dynamically from Supabase — no static INGEST_API_URL needed.
  */
 
 import { createHmac } from 'crypto';
 import type { TorrentJob } from '@/types';
 
-const BASE_URL    = process.env.INGEST_API_URL?.replace(/\/$/, '');
 const HMAC_SECRET = process.env.INGEST_HMAC_SECRET ?? '';
 
-if (!BASE_URL) {
-  console.warn('[ingest-api] INGEST_API_URL is not set — torrent ingest will fail at runtime');
-}
 if (!HMAC_SECRET) {
   console.warn('[ingest-api] INGEST_HMAC_SECRET is not set — all requests will be rejected by the container');
 }
 
-// ── HMAC-HS256 JWT ────────────────────────────────────────────────────────────
+// ── HMAC-HS256 JWT ─────────────────────────────────────────────────────────
 
 function b64url(value: Buffer | string): string {
   const buf = Buffer.isBuffer(value) ? value : Buffer.from(value);
@@ -50,7 +36,7 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   };
 }
 
-// ── Response helper ───────────────────────────────────────────────────────────
+// ── Response helper ────────────────────────────────────────────────────────
 
 async function expectJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -64,24 +50,27 @@ async function expectJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ── Request type ──────────────────────────────────────────────────────────────
+// ── Request type ───────────────────────────────────────────────────────────
 
 export interface IngestJobRequest {
+  job_id:          string;   // ingest_jobs row id from Supabase
   hash:            string;
-  name:            string;    // display name / slug
-  blob_base_name:  string;    // full path without extension: {userId}/{ts}-{slug}
-  storage_account: string;    // Azure storage account name
-  storage_key:     string;    // Azure storage account key
-  container_name:  string;    // blob container (e.g. "movies")
+  name:            string;
+  user_id:         string;
+  blob_base_name:  string;
+  storage_account: string;
+  storage_key:     string;
+  container_name:  string;
   trackers?:       string[];
 }
 
-// ── API calls ─────────────────────────────────────────────────────────────────
+// ── API calls (all accept a live IP) ──────────────────────────────────────
 
 export async function startIngestJob(
+  ip: string,
   req: IngestJobRequest,
-): Promise<{ job_id: string; stage: string }> {
-  const res = await fetch(`${BASE_URL}/download`, {
+): Promise<{ job_id: string; stage: string; queue_position?: number }> {
+  const res = await fetch(`http://${ip}:8000/download`, {
     method:  'POST',
     headers: authHeaders(),
     body:    JSON.stringify(req),
@@ -90,25 +79,24 @@ export async function startIngestJob(
   return expectJson(res);
 }
 
-export async function getIngestJobStatus(jobId: string): Promise<TorrentJob> {
-  const res = await fetch(`${BASE_URL}/status/${jobId}`, {
+export async function getIngestJobStatus(ip: string, jobId: string): Promise<TorrentJob> {
+  const res = await fetch(`http://${ip}:8000/status/${jobId}`, {
     headers: authHeaders(),
     cache:   'no-store',
   });
   return expectJson(res);
 }
 
-export async function cancelIngestJob(jobId: string): Promise<TorrentJob> {
-  const res = await fetch(`${BASE_URL}/jobs/${jobId}`, {
+export async function cancelIngestJob(ip: string, jobId: string): Promise<TorrentJob> {
+  const res = await fetch(`http://${ip}:8000/jobs/${jobId}`, {
     method:  'DELETE',
     headers: authHeaders(),
-    cache:   'no-store',
   });
   return expectJson(res);
 }
 
-export function getIngestJobStream(jobId: string): Promise<Response> {
-  return fetch(`${BASE_URL}/status/${jobId}/stream`, {
+export function getIngestJobStream(ip: string, jobId: string): Promise<Response> {
+  return fetch(`http://${ip}:8000/status/${jobId}/stream`, {
     headers: authHeaders({ Accept: 'text/event-stream' }),
     cache:   'no-store',
   });
