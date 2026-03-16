@@ -61,7 +61,8 @@ export default function BrowsePage() {
     let query = supabase.from('movies').select('*').order('created_at', { ascending: false });
     if (!(admin && globalView)) {
       const allowedIds = [user.id, ...Array.from(fIds)];
-      query = query.in('uploaded_by', allowedIds);
+      // Show movies uploaded by self/friends OR public movies
+      query = query.or(`uploaded_by.in.(${allowedIds.join(',')}),is_public.eq.true`);
     }
 
     const { data } = await query;

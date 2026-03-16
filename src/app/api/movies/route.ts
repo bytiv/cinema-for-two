@@ -1,5 +1,14 @@
 import { NextResponse } from 'next/server';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { createServerSupabaseClient, createServiceRoleClient } from '@/lib/supabase/server';
+
+async function isUserAdmin(supabase: ReturnType<typeof createServerSupabaseClient>, userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('user_id', userId)
+    .single();
+  return data?.role === 'admin';
+}
 
 export async function POST(request: Request) {
   try {
@@ -48,25 +57,37 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: 'Movie ID required' }, { status: 400 });
     }
 
-    // Verify ownership
+    // Verify ownership (admins can edit any movie)
     const { data: existing } = await supabase
       .from('movies')
       .select('uploaded_by')
       .eq('id', id)
       .single();
 
-    if (!existing || existing.uploaded_by !== user.id) {
+    if (!existing) {
+      return NextResponse.json({ error: 'Movie not found' }, { status: 404 });
+    }
+
+    const isOwner = existing.uploaded_by === user.id;
+    const admin   = await isUserAdmin(supabase, user.id);
+
+    if (!isOwner && !admin) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     // Only allow editing safe fields — never blob_url, blob_name, uploaded_by
     const allowed = ['title', 'description', 'quality', 'duration', 'subtitles', 'poster_url'];
+    // Only admins can toggle public visibility
+    if (admin) allowed.push('is_public');
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {
       if (key in updates) patch[key] = updates[key];
     }
 
-    const { data: movie, error } = await supabase
+    // Admin needs service role client to bypass RLS
+    const db = admin ? createServiceRoleClient() : supabase;
+
+    const { data: movie, error } = await db
       .from('movies')
       .update(patch)
       .eq('id', id)
@@ -99,18 +120,28 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Movie ID required' }, { status: 400 });
     }
 
-    // Verify ownership
+    // Verify ownership (admins can delete any movie)
     const { data: movie } = await supabase
       .from('movies')
       .select('uploaded_by')
       .eq('id', movieId)
       .single();
 
-    if (!movie || movie.uploaded_by !== user.id) {
+    if (!movie) {
+      return NextResponse.json({ error: 'Movie not found' }, { status: 404 });
+    }
+
+    const isOwner = movie.uploaded_by === user.id;
+    const admin   = await isUserAdmin(supabase, user.id);
+
+    if (!isOwner && !admin) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const { error } = await supabase.from('movies').delete().eq('id', movieId);
+    // Admin needs service role client to bypass RLS
+    const db = admin ? createServiceRoleClient() : supabase;
+
+    const { error } = await db.from('movies').delete().eq('id', movieId);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

@@ -613,3 +613,26 @@ CREATE POLICY "users can insert own jobs"
 
 ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 UPDATE container_state SET container_ip = NULL, container_starting = false WHERE id = 1;
+
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- CinemaForTwo — Public Movies + Ingest Metadata Migration
+-- Run this in Supabase SQL Editor
+-- ═══════════════════════════════════════════════════════════════
+
+-- 1. Add is_public to movies
+ALTER TABLE movies ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_movies_is_public ON movies(is_public) WHERE is_public = true;
+
+-- 2. Add metadata to ingest_jobs (for the movie-save-on-Ready fix)
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+
+-- 3. RLS: ensure all authenticated users can SELECT public movies
+-- (The existing "Movies are viewable by all authenticated users" policy
+--  already uses USING(true), so public movies are already readable.
+--  If you ever tighten that policy, uncomment the line below.)
+--
+-- CREATE POLICY "Anyone can view public movies"
+--   ON public.movies FOR SELECT TO authenticated
+--   USING (is_public = true);

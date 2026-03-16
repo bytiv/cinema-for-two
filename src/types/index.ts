@@ -66,6 +66,7 @@ export interface Movie {
   info_hash: string | null;       // null for direct uploads
   ingest_job_id: string | null;   // null for direct uploads
   uploaded_by: string;
+  is_public: boolean;
   created_at: string;
   updated_at: string;
   // Joined

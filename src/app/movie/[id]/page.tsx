@@ -459,17 +459,20 @@ export default function MovieDetailPage() {
 
     if (movieRes.data) {
       const uploaderId = movieRes.data.uploaded_by;
+      let isFriendOfUploader = false;
+
       if (uploaderId !== user.id) {
+        // Check direct friendship
+        const [{ data: reqRow }, { data: addrRow }] = await Promise.all([
+          supabase.from('friendships').select('id').eq('requester_id', user.id).eq('addressee_id', uploaderId).eq('status', 'accepted').maybeSingle(),
+          supabase.from('friendships').select('id').eq('requester_id', uploaderId).eq('addressee_id', user.id).eq('status', 'accepted').maybeSingle(),
+        ]);
+        isFriendOfUploader = !!(reqRow || addrRow);
+
         // Check profile for admin role
         const isAdmin = profileRes.data?.role === 'admin';
 
-        if (!isAdmin) {
-          // Check direct friendship
-          const [{ data: reqRow }, { data: addrRow }] = await Promise.all([
-            supabase.from('friendships').select('id').eq('requester_id', user.id).eq('addressee_id', uploaderId).eq('status', 'accepted').maybeSingle(),
-            supabase.from('friendships').select('id').eq('requester_id', uploaderId).eq('addressee_id', user.id).eq('status', 'accepted').maybeSingle(),
-          ]);
-
+        if (!isAdmin && !isFriendOfUploader) {
           // Check session-based invite access — user was invited to a room for this movie
           const { data: inviteRow } = await supabase
             .from('watch_invites')
@@ -479,15 +482,27 @@ export default function MovieDetailPage() {
             .eq('status', 'accepted')
             .maybeSingle();
 
-          if (!reqRow && !addrRow && !inviteRow) {
+          // Allow access if the movie is public, even without friendship
+          const isPublicMovie = movieRes.data.is_public === true;
+
+          if (!inviteRow && !isPublicMovie) {
             setAccessDenied(true);
             setLoading(false);
             return;
           }
         }
+      } else {
+        isFriendOfUploader = true; // you're always "friend" of yourself for display
       }
-      const { data: uploaderProfile } = await supabase.from('profiles').select('*').eq('user_id', movieRes.data.uploaded_by).single();
-      setMovie({ ...movieRes.data, subtitles: movieRes.data.subtitles ?? [], uploader: uploaderProfile || undefined });
+
+      // Only show uploader info if user is the uploader, a friend, or an admin
+      const showUploader = uploaderId === user.id || isFriendOfUploader || profileRes.data?.role === 'admin';
+      let uploaderProfile = undefined;
+      if (showUploader) {
+        const { data: up } = await supabase.from('profiles').select('*').eq('user_id', uploaderId).single();
+        uploaderProfile = up || undefined;
+      }
+      setMovie({ ...movieRes.data, subtitles: movieRes.data.subtitles ?? [], uploader: uploaderProfile });
 
       // ── Background probe: back-fill duration + file_size for torrent-ingested movies ──
       // Runs for any ingest method when the movie is owned by this user and
@@ -515,9 +530,31 @@ export default function MovieDetailPage() {
   async function handleDelete() {
     if (!movie) return;
     setDeleting(true);
-    await supabase.from('movies').delete().eq('id', movie.id);
-    router.push('/browse');
-    router.refresh();
+    const res = await fetch(`/api/movies?id=${movie.id}`, { method: 'DELETE' });
+    if (res.ok) {
+      router.push('/browse');
+      router.refresh();
+    }
+    setDeleting(false);
+  }
+
+  const [togglingPublic, setTogglingPublic] = useState(false);
+
+  async function handleTogglePublic() {
+    if (!movie) return;
+    setTogglingPublic(true);
+    try {
+      const res = await fetch('/api/movies', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: movie.id, is_public: !movie.is_public }),
+      });
+      if (res.ok) {
+        const { movie: updated } = await res.json();
+        setMovie((prev) => prev ? { ...prev, is_public: updated.is_public } : prev);
+      }
+    } catch {}
+    setTogglingPublic(false);
   }
 
   if (loading) return (
@@ -666,6 +703,16 @@ export default function MovieDetailPage() {
               ) : (
                 <Button size="lg" variant="warm" icon={<Users className="w-5 h-5" />} onClick={handleWatchTogether} loading={creatingRoom}>
                   Watch Together
+                </Button>
+              )}
+              {adminMode && (
+                <Button
+                  variant={movie.is_public ? 'primary' : 'secondary'}
+                  icon={<Globe className="w-4 h-4" />}
+                  onClick={handleTogglePublic}
+                  loading={togglingPublic}
+                >
+                  {movie.is_public ? 'Public' : 'Publish'}
                 </Button>
               )}
               {canEdit && (
