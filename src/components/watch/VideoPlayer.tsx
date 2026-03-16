@@ -60,6 +60,16 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const isExternalRef  = useRef(false);
   const lastTapRef     = useRef<number>(0);
 
+  // ─── FIX 1: Track seeking/buffering state to prevent timeUpdate from
+  //            overwriting the position we're seeking TO with the stale
+  //            position the video is seeking FROM. ───
+  const isSeeking      = useRef(false);
+  const seekTarget     = useRef<number | null>(null);
+
+  // ─── FIX 2: Deduplicate externalControl to prevent re-seeking on
+  //            parent re-renders that pass the same logical command. ───
+  const lastExternalControl = useRef<string | null>(null);
+
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [currentTime,  setCurrentTime]  = useState(0);
   const [duration,     setDuration]     = useState(0);
@@ -110,6 +120,30 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
   }, []);
 
+  // ─── FIX 3: Listen to native seeking/seeked events so we know when the
+  //            browser is actively repositioning the playhead. ───
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const onSeeking = () => { isSeeking.current = true; };
+    const onSeeked  = () => {
+      isSeeking.current = false;
+      // Snap UI to the actual landed position
+      if (video) {
+        setCurrentTime(video.currentTime);
+      }
+      seekTarget.current = null;
+    };
+
+    video.addEventListener('seeking', onSeeking);
+    video.addEventListener('seeked',  onSeeked);
+    return () => {
+      video.removeEventListener('seeking', onSeeking);
+      video.removeEventListener('seeked',  onSeeked);
+    };
+  }, []);
+
   useEffect(() => {
     if (!videoRef.current) return;
     const sync = () => {
@@ -140,16 +174,41 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     return () => clearInterval(interval);
   }, [activeSubtitle]);
 
+  // ─── FIX 2 (cont.): Deduplicate externalControl ───
   useEffect(() => {
     if (!externalControl || !videoRef.current) return;
+
+    // Build a fingerprint for this control command
+    const fingerprint = `${externalControl.type}:${externalControl.timestamp.toFixed(2)}`;
+    if (lastExternalControl.current === fingerprint) return; // already applied
+    lastExternalControl.current = fingerprint;
+
     isExternalRef.current = true;
     const v = videoRef.current;
+
+    // Set seekTarget so timeUpdate doesn't fight us
+    seekTarget.current = externalControl.timestamp;
+    isSeeking.current = true;
+
     switch (externalControl.type) {
-      case 'play':  v.currentTime = externalControl.timestamp; v.play().catch(() => {}); setIsPlaying(true);  break;
-      case 'pause': v.currentTime = externalControl.timestamp; v.pause(); setIsPlaying(false); break;
-      case 'seek':  v.currentTime = externalControl.timestamp; break;
+      case 'play':
+        v.currentTime = externalControl.timestamp;
+        setCurrentTime(externalControl.timestamp);
+        v.play().catch(() => {});
+        setIsPlaying(true);
+        break;
+      case 'pause':
+        v.currentTime = externalControl.timestamp;
+        setCurrentTime(externalControl.timestamp);
+        v.pause();
+        setIsPlaying(false);
+        break;
+      case 'seek':
+        v.currentTime = externalControl.timestamp;
+        setCurrentTime(externalControl.timestamp);
+        break;
     }
-    setTimeout(() => { isExternalRef.current = false; }, 100);
+    setTimeout(() => { isExternalRef.current = false; }, 200);
   }, [externalControl]);
 
   useEffect(() => {
@@ -183,8 +242,13 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     const rect = progressRef.current.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const time = Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
+
+    // ─── FIX 1 (cont.): Mark that we're seeking so timeUpdate won't fight us ───
+    seekTarget.current = time;
+    isSeeking.current = true;
+
     videoRef.current.currentTime = time;
-    setCurrentTime(time);
+    setCurrentTime(time); // Immediately reflect in UI
     emitEvent('seek', time);
   };
 
@@ -200,7 +264,13 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const skip = (s: number) => {
     if (!videoRef.current) return;
     const t = Math.max(0, Math.min(duration, videoRef.current.currentTime + s));
+
+    // ─── FIX 1 (cont.): Same pattern for skip ───
+    seekTarget.current = t;
+    isSeeking.current = true;
+
     videoRef.current.currentTime = t;
+    setCurrentTime(t);
     emitEvent('seek', t);
   };
 
@@ -256,6 +326,50 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     return () => window.removeEventListener('keydown', handleKey);
   }, [isPlaying, duration]);
 
+  // ─── FIX 1 (core): The onTimeUpdate handler now guards against stale
+  //     position reports while the browser is seeking or buffering. ───
+  const handleTimeUpdate = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // If we're in the middle of a seek, don't let the browser's "old"
+    // position overwrite the UI — it fires timeUpdate with the FROM
+    // position before it arrives at the TO position.
+    if (isSeeking.current) return;
+
+    // Extra guard: if we have a pending seek target and the video hasn't
+    // reached close to it yet, ignore the update.
+    if (seekTarget.current !== null) {
+      if (Math.abs(video.currentTime - seekTarget.current) > 1.5) {
+        return;
+      }
+      // Close enough — clear the target
+      seekTarget.current = null;
+    }
+
+    setCurrentTime(video.currentTime);
+  }, []);
+
+  // ─── FIX 4: Read the correct buffered range (the one containing currentTime)
+  //            instead of always reading the last range. ───
+  const handleProgress = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !video.buffered.length) return;
+    const ct = video.currentTime;
+    let end = 0;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= ct && ct <= video.buffered.end(i)) {
+        end = video.buffered.end(i);
+        break;
+      }
+    }
+    // Fallback: if we didn't find a range containing currentTime, use the last range
+    if (end === 0 && video.buffered.length > 0) {
+      end = video.buffered.end(video.buffered.length - 1);
+    }
+    setBuffered(end);
+  }, []);
+
   const subBottom = subStyle.position === 'bottom' ? (showControls ? '80px' : '20px') : undefined;
   const subTop    = subStyle.position === 'top' ? '20px' : undefined;
 
@@ -275,17 +389,19 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         onClick={isMobile ? undefined : togglePlay}
         preload="auto"
         playsInline
-        onTimeUpdate={() => { if (videoRef.current) setCurrentTime(videoRef.current.currentTime); }}
+        onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={() => {
           if (videoRef.current) {
             setDuration(videoRef.current.duration);
-            if (initialTime && initialTime > 0) { videoRef.current.currentTime = initialTime; setCurrentTime(initialTime); }
+            if (initialTime && initialTime > 0) {
+              seekTarget.current = initialTime;
+              isSeeking.current = true;
+              videoRef.current.currentTime = initialTime;
+              setCurrentTime(initialTime);
+            }
           }
         }}
-        onProgress={() => {
-          if (videoRef.current?.buffered.length)
-            setBuffered(videoRef.current.buffered.end(videoRef.current.buffered.length - 1));
-        }}
+        onProgress={handleProgress}
         onEnded={() => setIsPlaying(false)}
         crossOrigin="anonymous"
       >
