@@ -22,6 +22,42 @@ const supabaseAdmin = createClient(
 
 const TERMINAL = new Set(['Ready', 'Failed', 'Cancelled']);
 
+/** Map Python container stage → ingest_jobs status */
+function stageToStatus(stage: string): string | null {
+  switch (stage) {
+    case 'Queued':                    return 'queued';
+    case 'Fetching torrent info':     return 'running';
+    case 'Downloading to servers':    return 'running';
+    case 'Uploading to storage':      return 'uploading';
+    case 'Ready':                     return 'completed';
+    case 'Failed':                    return 'failed';
+    case 'Cancelled':                 return 'cancelled';
+    default:                          return null;
+  }
+}
+
+/** Fire-and-forget update to keep ingest_jobs in sync */
+function syncJobStatus(jobId: string, stage: string) {
+  const status = stageToStatus(stage);
+  if (!status) return;
+
+  const update: Record<string, any> = {
+    status,
+    last_heartbeat_at: new Date().toISOString(),
+  };
+  if (TERMINAL.has(stage)) {
+    update.finished_at = new Date().toISOString();
+  }
+
+  supabaseAdmin
+    .from('ingest_jobs')
+    .update(update)
+    .eq('id', jobId)
+    .then(({ error }) => {
+      if (error) console.error('[ingest/stream] syncJobStatus error:', error.message);
+    });
+}
+
 async function getLiveIP(): Promise<string | null> {
   const { data } = await supabaseAdmin
     .from('container_state')
@@ -99,6 +135,9 @@ export async function GET(
               push(line + '\n');
               continue;
             }
+
+            // ── Sync ingest_jobs status on every event ──────────
+            syncJobStatus(params.jobId, job.stage);
 
             // ── Auto-save movie on Ready ───────────────────────────
             if (

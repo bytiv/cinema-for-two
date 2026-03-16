@@ -642,3 +642,29 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS can_upload_torrent BOOLEAN NOT NUL
 ALTER TABLE container_state ADD COLUMN IF NOT EXISTS hmac_secret TEXT;
 
 UPDATE container_state SET container_ip = NULL, container_starting = false, hmac_secret = NULL WHERE id = 1;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- CinemaForTwo — Ingest Jobs Status Sync Migration
+-- Run this in Supabase SQL Editor
+-- ═══════════════════════════════════════════════════════════════
+
+-- 1. Ensure last_heartbeat_at and finished_at columns exist
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ;
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS error TEXT;
+
+-- 2. Allow users to update their own jobs (needed for client-side stale cleanup)
+CREATE POLICY "users can update own jobs"
+  ON ingest_jobs
+  FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- 3. Clean up any currently stuck jobs (one-time fix)
+UPDATE ingest_jobs
+SET status = 'failed',
+    error = 'Cleaned up stale job from before status-sync fix',
+    finished_at = now()
+WHERE status IN ('pending', 'submitted', 'queued', 'running', 'uploading')
+  AND created_at < now() - INTERVAL '2 hours';

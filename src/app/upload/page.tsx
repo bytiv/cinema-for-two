@@ -383,20 +383,49 @@ export default function UploadPage() {
         .from('ingest_jobs')
         .select('*')
         .eq('user_id', user.id)
-        .in('status', ['submitted', 'queued', 'running', 'uploading'])
+        .in('status', ['pending', 'submitted', 'queued', 'running', 'uploading'])
         .order('created_at', { ascending: false });
 
       if (!rows?.length) return;
 
-      const restored: ActiveJob[] = rows.map((r) => ({
-        jobId:      r.id,
-        title:      r.movie_name,
-        hash:       r.hash,
-        job:        null,
-        streamMeta: {},
-        startedAt:  new Date(r.created_at).getTime(),
-        movieId:    undefined,
-      }));
+      const STALE_MS = 2 * 60 * 60 * 1000; // 2 hours
+      const now = Date.now();
+
+      const restored: ActiveJob[] = [];
+      const staleIds: string[] = [];
+
+      for (const r of rows) {
+        const age = now - new Date(r.created_at).getTime();
+        const heartbeatAge = r.last_heartbeat_at
+          ? now - new Date(r.last_heartbeat_at).getTime()
+          : age;
+
+        // If the job has been sitting without a heartbeat for over 2 hours, it's stale
+        if (heartbeatAge > STALE_MS) {
+          staleIds.push(r.id);
+          continue;
+        }
+
+        restored.push({
+          jobId:      r.id,
+          title:      r.movie_name,
+          hash:       r.hash,
+          job:        null,
+          streamMeta: {},
+          startedAt:  new Date(r.created_at).getTime(),
+          movieId:    undefined,
+        });
+      }
+
+      // Mark stale jobs as failed so they don't block the queue forever
+      if (staleIds.length > 0) {
+        await supabase
+          .from('ingest_jobs')
+          .update({ status: 'failed', error: 'Job timed out — no heartbeat received', finished_at: new Date().toISOString() })
+          .in('id', staleIds);
+      }
+
+      if (!restored.length) return;
 
       setActiveJobs(restored);
       setTab('jobs');
@@ -428,7 +457,34 @@ export default function UploadPage() {
 
     es.onmessage = (e) => {
       try {
-        const job: TorrentJob & { movie_id?: string } = JSON.parse(e.data);
+        const parsed = JSON.parse(e.data);
+
+        // Handle error events from the stream route
+        if (parsed.error) {
+          es.close();
+          delete esRefs.current[jobId];
+          setActiveJobs((prev) =>
+            prev.map((aj) =>
+              aj.jobId === jobId && (!aj.job || !TERMINAL.has(aj.job.stage))
+                ? {
+                    ...aj,
+                    job: {
+                      job_id: jobId,
+                      info_hash: aj.hash,
+                      stage: 'Failed' as const,
+                      download_percent: aj.job?.download_percent ?? 0,
+                      upload_percent: aj.job?.upload_percent ?? 0,
+                      notification: parsed.error,
+                      error_code: 'service_error',
+                    } as TorrentJob,
+                  }
+                : aj,
+            ),
+          );
+          return;
+        }
+
+        const job: TorrentJob & { movie_id?: string } = parsed;
         setActiveJobs((prev) =>
           prev.map((aj) =>
             aj.jobId === jobId
@@ -444,9 +500,44 @@ export default function UploadPage() {
       } catch {}
     };
 
+    let retryCount = 0;
+    const MAX_RETRIES = 2;
+
     es.onerror = () => {
       es.close();
       delete esRefs.current[jobId];
+
+      // Check if job is already terminal — if so, no need to retry or error
+      const currentJob = activeJobs.find((aj) => aj.jobId === jobId);
+      if (currentJob?.job && TERMINAL.has(currentJob.job.stage)) return;
+
+      if (retryCount < MAX_RETRIES) {
+        retryCount++;
+        // Retry after a short delay
+        setTimeout(() => {
+          _attachStream(jobId, title, meta);
+        }, 3000 * retryCount);
+      } else {
+        // All retries exhausted — mark as failed in the UI
+        setActiveJobs((prev) =>
+          prev.map((aj) =>
+            aj.jobId === jobId && (!aj.job || !TERMINAL.has(aj.job.stage))
+              ? {
+                  ...aj,
+                  job: {
+                    job_id: jobId,
+                    info_hash: aj.hash,
+                    stage: 'Failed' as const,
+                    download_percent: aj.job?.download_percent ?? 0,
+                    upload_percent: aj.job?.upload_percent ?? 0,
+                    notification: 'Lost connection to ingest service. The download may still be running — refresh the page to check.',
+                    error_code: 'stream_disconnected',
+                  } as TorrentJob,
+                }
+              : aj,
+          ),
+        );
+      }
     };
   }
 
