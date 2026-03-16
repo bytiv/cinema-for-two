@@ -636,3 +636,5 @@ ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::js
 -- CREATE POLICY "Anyone can view public movies"
 --   ON public.movies FOR SELECT TO authenticated
 --   USING (is_public = true);
+
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS can_upload_torrent BOOLEAN NOT NULL DEFAULT false;

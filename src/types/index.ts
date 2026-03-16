@@ -10,6 +10,7 @@ export interface Profile {
   last_seen_at: string | null;
   hide_online_status: boolean;
   postcards_disabled: boolean;
+  can_upload_torrent: boolean;
   created_at: string;
   updated_at: string;
 }

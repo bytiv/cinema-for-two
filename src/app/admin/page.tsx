@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { Profile } from '@/types';
 import Navbar from '@/components/layout/Navbar';
 import Button from '@/components/ui/Button';
-import { CheckCircle, XCircle, Clock, Shield, Users, ShieldCheck } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Shield, Users, ShieldCheck, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { useAdminMode } from '@/contexts/AdminModeContext';
@@ -44,6 +44,22 @@ export default function AdminPage() {
     if (!error) {
       setProfiles((prev) =>
         prev.map((p) => (p.id === profile.id ? { ...p, status: action } : p))
+      );
+    }
+    setActionLoading(null);
+  }
+
+  async function handleToggleTorrent(profile: Profile) {
+    setActionLoading(profile.id);
+    const newVal = !profile.can_upload_torrent;
+    const { error } = await supabase
+      .from('profiles')
+      .update({ can_upload_torrent: newVal })
+      .eq('id', profile.id);
+
+    if (!error) {
+      setProfiles((prev) =>
+        prev.map((p) => (p.id === profile.id ? { ...p, can_upload_torrent: newVal } : p))
       );
     }
     setActionLoading(null);
@@ -162,6 +178,24 @@ export default function AdminPage() {
                   >
                     {profile.status}
                   </span>
+
+                  {/* Torrent upload toggle */}
+                  {profile.role !== 'admin' && profile.status === 'approved' && (
+                    <button
+                      onClick={() => handleToggleTorrent(profile)}
+                      disabled={actionLoading === profile.id}
+                      className={cn(
+                        'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all',
+                        profile.can_upload_torrent
+                          ? 'bg-cinema-secondary/15 text-cinema-secondary border-cinema-secondary/30'
+                          : 'bg-cinema-card text-cinema-text-dim border-cinema-border hover:text-cinema-text'
+                      )}
+                      title={profile.can_upload_torrent ? 'Revoke torrent upload' : 'Allow torrent upload'}
+                    >
+                      <Upload className="w-3 h-3" />
+                      {profile.can_upload_torrent ? 'Torrent' : 'No torrent'}
+                    </button>
+                  )}
 
                   {/* Actions (not for admins) */}
                   {profile.role !== 'admin' && (

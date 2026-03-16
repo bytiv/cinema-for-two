@@ -329,6 +329,9 @@ export default function UploadPage() {
   // ── Tab state ──────────────────────────────────────────────
   const [tab, setTab] = useState<Tab>('direct');
 
+  // ── Permission state ────────────────────────────────────────
+  const [canTorrent, setCanTorrent] = useState(false);
+
   // ── Direct upload state ────────────────────────────────────
   const [movieFile,        setMovieFile]        = useState<File | null>(null);
   const [posterFile,       setPosterFile]       = useState<File | null>(null);
@@ -365,6 +368,16 @@ export default function UploadPage() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      // Check torrent upload permission
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, can_upload_torrent')
+        .eq('user_id', user.id)
+        .single();
+      if (profile) {
+        setCanTorrent(profile.role === 'admin' || profile.can_upload_torrent === true);
+      }
 
       const { data: rows } = await supabase
         .from('ingest_jobs')
@@ -476,6 +489,11 @@ export default function UploadPage() {
     if (!hashInput.trim() || !torrentTitle.trim()) return;
     setSubmitPhase('idle');
     setTorrentError('');
+
+    if (!canTorrent) {
+      setTorrentError('You don\'t have permission to upload via torrent. Ask an admin to enable this for your account.');
+      return;
+    }
 
     try {
       const { data: { user } } = await supabase.auth.getUser();

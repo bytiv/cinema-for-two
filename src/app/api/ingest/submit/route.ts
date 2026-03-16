@@ -47,6 +47,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 1b. Check torrent upload permission
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('role, can_upload_torrent')
+      .eq('user_id', user.id)
+      .single();
+
+    if (!profile || (profile.role !== 'admin' && !profile.can_upload_torrent)) {
+      return NextResponse.json(
+        { error: 'You don\'t have permission to upload via torrent.' },
+        { status: 403 },
+      );
+    }
+
     // 2. Check user's active job count (pending/submitted/queued/running/uploading)
     const { count } = await supabaseAdmin
       .from('ingest_jobs')
