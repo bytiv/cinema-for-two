@@ -14,6 +14,8 @@ import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { generateReadSasUrl, CONTAINERS } from '@/lib/azure-blob';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: Request) {
   try {
     const supabase = createServerSupabaseClient();
