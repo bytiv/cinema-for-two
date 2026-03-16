@@ -300,7 +300,7 @@ function JobCard({
         )}
         {stage === 'Failed' && (
           <p className="text-xs text-cinema-error flex items-center gap-1.5 flex-1">
-            <AlertCircle className="w-3.5 h-3.5" /> {job?.error ?? 'Unknown error'}
+            <AlertCircle className="w-3.5 h-3.5" /> {job?.error_code ?? job?.notification ?? 'Unknown error'}
           </p>
         )}
         {!isTerminal && (
