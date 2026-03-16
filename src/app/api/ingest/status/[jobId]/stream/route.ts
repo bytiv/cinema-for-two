@@ -71,8 +71,12 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { jobId: string } },
 ) {
+  const { jobId } = params;
+
   const ip = await getLiveIP();
   if (!ip) {
+    // No container IP — mark the job as failed if it's still active
+    syncJobStatus(jobId, 'Failed');
     return new Response('data: {"error":"Ingest service is not running"}\n\n', {
       headers: { 'Content-Type': 'text/event-stream' },
     });
@@ -81,20 +85,29 @@ export async function GET(
   // Fetch the job row to get user_id, movie_name, and metadata
   const { data: jobRow } = await supabaseAdmin
     .from('ingest_jobs')
-    .select('user_id, hash, movie_name, metadata')
-    .eq('id', params.jobId)
+    .select('user_id, hash, movie_name, metadata, status')
+    .eq('id', jobId)
     .single();
+
+  // If the job is already completed/failed/cancelled, don't bother connecting upstream
+  if (jobRow && ['completed', 'failed', 'cancelled'].includes(jobRow.status)) {
+    return new Response(`data: {"error":"Job is already ${jobRow.status}"}\n\n`, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
 
   let upstream: Response;
   try {
-    upstream = await getIngestJobStream(ip, params.jobId);
+    upstream = await getIngestJobStream(ip, jobId);
   } catch (err: any) {
+    syncJobStatus(jobId, 'Failed');
     return new Response(`data: {"error":"${err.message}"}\n\n`, {
       headers: { 'Content-Type': 'text/event-stream' },
     });
   }
 
   if (!upstream.ok || !upstream.body) {
+    syncJobStatus(jobId, 'Failed');
     return new Response(`data: {"error":"Ingest service returned ${upstream.status}"}\n\n`, {
       headers: { 'Content-Type': 'text/event-stream' },
     });
@@ -137,7 +150,7 @@ export async function GET(
             }
 
             // ── Sync ingest_jobs status on every event ──────────
-            syncJobStatus(params.jobId, job.stage);
+            syncJobStatus(jobId, job.stage);
 
             // ── Auto-save movie on Ready ───────────────────────────
             if (

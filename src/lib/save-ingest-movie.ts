@@ -122,14 +122,22 @@ export async function saveIngestMovie(
   }
 
   // ── Back-fill torrent_jobs.movie_id ───────────────────────────────────────
-  const { error: jobError } = await supabase.rpc('upsert_torrent_job', {
-    p_job_id:       job.job_id,
-    p_requested_by: userId,
-    p_info_hash:    job.info_hash,
-    p_stage:        'Ready',
-    p_blob_url:     job.blob_url,
-    p_movie_id:     movie.id,
-  });
+  // Use direct upsert instead of RPC to avoid PostgREST schema-cache issues
+  // with partial named parameters on functions with many defaults.
+  const { error: jobError } = await supabase
+    .from('torrent_jobs')
+    .upsert(
+      {
+        job_id:       job.job_id,
+        requested_by: userId,
+        info_hash:    job.info_hash ?? '',
+        stage:        'Ready',
+        blob_url:     job.blob_url,
+        movie_id:     movie.id,
+        completed_at: new Date().toISOString(),
+      },
+      { onConflict: 'job_id' },
+    );
 
   if (jobError) {
     console.error(`[save-ingest-movie] back-fill movie_id: ${jobError.message}`);
