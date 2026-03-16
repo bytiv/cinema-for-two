@@ -95,3 +95,8 @@ export async function getContainerIP(): Promise<string | null> {
   const group  = await client.containerGroups.get(RG, CONTAINER_NAME);
   return group.ipAddress?.ip ?? null;
 }
+
+export async function deleteContainer(): Promise<void> {
+  const client = getClient();
+  await client.containerGroups.beginDeleteAndWait(RG, CONTAINER_NAME);
+}

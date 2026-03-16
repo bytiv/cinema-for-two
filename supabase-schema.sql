@@ -638,3 +638,7 @@ ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::js
 --   USING (is_public = true);
 
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS can_upload_torrent BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE container_state ADD COLUMN IF NOT EXISTS hmac_secret TEXT;
+
+UPDATE container_state SET container_ip = NULL, container_starting = false, hmac_secret = NULL WHERE id = 1;

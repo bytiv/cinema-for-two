@@ -1,6 +1,7 @@
 import { NextResponse }                              from 'next/server';
 import { createClient }                              from '@supabase/supabase-js';
-import { getContainerState, startContainer, createContainer, getContainerIP } from '@/lib/azure-arm';
+import { randomBytes }                               from 'crypto';
+import { getContainerState, startContainer, createContainer, getContainerIP, deleteContainer } from '@/lib/azure-arm';
 
 const POLL_INTERVAL_MS = 3_000;
 const STARTUP_TIMEOUT_MS = 90_000;
@@ -43,7 +44,7 @@ export async function POST() {
     // 1. Read current state from Supabase
     const { data: state } = await supabaseAdmin
       .from('container_state')
-      .select('container_ip, container_starting')
+      .select('container_ip, container_starting, hmac_secret')
       .eq('id', 1)
       .single();
 
@@ -70,18 +71,31 @@ export async function POST() {
     try {
       const azureState = await getContainerState();
 
-      if (azureState.exists && !azureState.running) {
-        // Container exists but stopped — start it
+      if (azureState.exists && !azureState.running && state?.hmac_secret) {
+        // Container exists but stopped — start it (reuses existing secret)
         await startContainer();
-      } else if (!azureState.exists) {
-        // Container doesn't exist — full deploy
+      } else {
+        // Container doesn't exist or no stored secret — delete if stale, then create fresh
+        if (azureState.exists) {
+          await deleteContainer();
+        }
+
+        // Generate a fresh HMAC secret
+        const hmacSecret = randomBytes(32).toString('hex');
+
         await createContainer(
-          process.env.INGEST_HMAC_SECRET!,
+          hmacSecret,
           process.env.AZURE_STORAGE_ACCOUNT_NAME!,
           process.env.AZURE_STORAGE_ACCOUNT_KEY!,
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY!,
         );
+
+        // Store the secret so ingest-api.ts can use it for signing
+        await supabaseAdmin
+          .from('container_state')
+          .update({ hmac_secret: hmacSecret })
+          .eq('id', 1);
       }
 
       // Poll ARM for IP

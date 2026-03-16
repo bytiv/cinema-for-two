@@ -1,15 +1,40 @@
 /**
  * Server-side client for the Python Media Ingest API.
  * IP is resolved dynamically from Supabase — no static INGEST_API_URL needed.
+ * HMAC secret is generated per-container and stored in Supabase container_state.
  */
 
 import { createHmac } from 'crypto';
+import { createClient } from '@supabase/supabase-js';
 import type { TorrentJob } from '@/types';
 
-const HMAC_SECRET = process.env.INGEST_HMAC_SECRET ?? '';
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+);
 
-if (!HMAC_SECRET) {
-  console.warn('[ingest-api] INGEST_HMAC_SECRET is not set — all requests will be rejected by the container');
+// ── HMAC secret cache (avoid hitting Supabase on every request) ─────────────
+let _cachedSecret: string | null = null;
+let _cachedAt = 0;
+const CACHE_TTL_MS = 30_000; // 30 seconds
+
+async function getHmacSecret(): Promise<string> {
+  const now = Date.now();
+  if (_cachedSecret && now - _cachedAt < CACHE_TTL_MS) return _cachedSecret;
+
+  const { data } = await supabaseAdmin
+    .from('container_state')
+    .select('hmac_secret')
+    .eq('id', 1)
+    .single();
+
+  _cachedSecret = data?.hmac_secret ?? '';
+  _cachedAt = now;
+
+  if (!_cachedSecret) {
+    console.warn('[ingest-api] No HMAC secret in container_state — requests will be rejected');
+  }
+  return _cachedSecret;
 }
 
 // ── HMAC-HS256 JWT ─────────────────────────────────────────────────────────
@@ -19,19 +44,20 @@ function b64url(value: Buffer | string): string {
   return buf.toString('base64url');
 }
 
-function makeIngestToken(): string {
+async function makeIngestToken(): Promise<string> {
+  const secret = await getHmacSecret();
   const now     = Math.floor(Date.now() / 1000);
   const header  = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64url(JSON.stringify({ sub: 'ingest', iat: now, exp: now + 300 }));
   const signing = `${header}.${payload}`;
-  const sig     = createHmac('sha256', HMAC_SECRET).update(signing).digest();
+  const sig     = createHmac('sha256', secret).update(signing).digest();
   return `${signing}.${b64url(sig)}`;
 }
 
-function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+async function authHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
   return {
     'Content-Type':  'application/json',
-    'Authorization': `Bearer ${makeIngestToken()}`,
+    'Authorization': `Bearer ${await makeIngestToken()}`,
     ...extra,
   };
 }
@@ -72,7 +98,7 @@ export async function startIngestJob(
 ): Promise<{ job_id: string; stage: string; queue_position?: number }> {
   const res = await fetch(`http://${ip}:8000/download`, {
     method:  'POST',
-    headers: authHeaders(),
+    headers: await authHeaders(),
     body:    JSON.stringify(req),
     cache:   'no-store',
   });
@@ -81,7 +107,7 @@ export async function startIngestJob(
 
 export async function getIngestJobStatus(ip: string, jobId: string): Promise<TorrentJob> {
   const res = await fetch(`http://${ip}:8000/status/${jobId}`, {
-    headers: authHeaders(),
+    headers: await authHeaders(),
     cache:   'no-store',
   });
   return expectJson(res);
@@ -90,14 +116,14 @@ export async function getIngestJobStatus(ip: string, jobId: string): Promise<Tor
 export async function cancelIngestJob(ip: string, jobId: string): Promise<TorrentJob> {
   const res = await fetch(`http://${ip}:8000/jobs/${jobId}`, {
     method:  'DELETE',
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
   return expectJson(res);
 }
 
-export function getIngestJobStream(ip: string, jobId: string): Promise<Response> {
+export async function getIngestJobStream(ip: string, jobId: string): Promise<Response> {
   return fetch(`http://${ip}:8000/status/${jobId}/stream`, {
-    headers: authHeaders({ Accept: 'text/event-stream' }),
+    headers: await authHeaders({ Accept: 'text/event-stream' }),
     cache:   'no-store',
   });
 }
