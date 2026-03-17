@@ -83,8 +83,6 @@ export async function createContainer(
         { name: 'AZURE_RESOURCE_GROUP',   value:        RG },
         { name: 'AZURE_CONTAINER_NAME',   value:        CONTAINER_NAME },
         { name: 'IDLE_SHUTDOWN_SECONDS',  value:        process.env.IDLE_SHUTDOWN_SECONDS ?? '180' },
-        { name: 'MAX_CONCURRENT_GLOBAL',  value:        process.env.MAX_CONCURRENT_GLOBAL ?? '4' },
-        { name: 'MAX_CONCURRENT_PER_USER',value:        process.env.MAX_CONCURRENT_PER_USER ?? '2' },
       ],
     }],
   });

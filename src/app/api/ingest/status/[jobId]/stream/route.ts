@@ -25,7 +25,6 @@ const TERMINAL = new Set(['Ready', 'Failed', 'Cancelled']);
 /** Map Python container stage → ingest_jobs status */
 function stageToStatus(stage: string): string | null {
   switch (stage) {
-    case 'Queued':                    return 'queued';
     case 'Fetching torrent info':     return 'running';
     case 'Downloading to servers':    return 'running';
     case 'Uploading to storage':      return 'uploading';

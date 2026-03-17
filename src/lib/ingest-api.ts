@@ -95,7 +95,7 @@ export interface IngestJobRequest {
 export async function startIngestJob(
   ip: string,
   req: IngestJobRequest,
-): Promise<{ job_id: string; stage: string; queue_position?: number }> {
+): Promise<{ job_id: string; stage: string }> {
   const res = await fetch(`http://${ip}:8000/download`, {
     method:  'POST',
     headers: await authHeaders(),

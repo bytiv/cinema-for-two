@@ -61,12 +61,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Check user's active job count (pending/submitted/queued/running/uploading)
+    // 2. Check user's active job count (pending/submitted/running/uploading)
     const { count } = await supabaseAdmin
       .from('ingest_jobs')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', user.id)
-      .in('status', ['pending', 'submitted', 'queued', 'running', 'uploading']);
+      .in('status', ['pending', 'submitted', 'running', 'uploading']);
 
     if ((count ?? 0) >= MAX_USER_JOBS) {
       return NextResponse.json(

@@ -109,7 +109,6 @@ function stageColor(stage: string) {
   if (stage === 'Failed')               return 'text-cinema-error bg-cinema-error/10 border-cinema-error/20';
   if (stage === 'Cancelled')            return 'text-cinema-text-dim bg-cinema-card border-cinema-border';
   if (stage === 'Uploading to storage') return 'text-cinema-warm bg-cinema-warm/10 border-cinema-warm/20';
-  if (stage === 'Queued')               return 'text-cinema-text-muted bg-cinema-surface border-cinema-border';
   return 'text-cinema-secondary bg-cinema-secondary/10 border-cinema-secondary/20';
 }
 
@@ -119,7 +118,6 @@ function stageIcon(stage: string) {
   if (stage === 'Cancelled')              return <Ban className="w-3.5 h-3.5" />;
   if (stage === 'Uploading to storage')   return <HardDrive className="w-3.5 h-3.5" />;
   if (stage === 'Downloading to servers') return <Download className="w-3.5 h-3.5" />;
-  if (stage === 'Queued')                 return <Clock className="w-3.5 h-3.5" />;
   return <Loader2 className="w-3.5 h-3.5 animate-spin" />;
 }
 
@@ -181,16 +179,14 @@ function JobCard({
   onGoToMovie: (movieId: string) => void;
 }) {
   const { job, title, hash } = activeJob;
-  const stage      = job?.stage ?? 'Queued';
+  const stage      = job?.stage ?? 'Fetching torrent info';
   const isTerminal = TERMINAL.has(stage);
-  const isQueued   = stage === 'Queued';
 
   return (
     <div className={cn(
       'rounded-2xl border bg-cinema-card/60 backdrop-blur-sm overflow-hidden transition-all duration-300',
       stage === 'Ready'  ? 'border-cinema-success/30' :
-      stage === 'Failed' ? 'border-cinema-error/30'   :
-      isQueued           ? 'border-cinema-border/60'  : 'border-cinema-border',
+      stage === 'Failed' ? 'border-cinema-error/30'   : 'border-cinema-border',
     )}>
       {/* Header */}
       <div className="flex items-start justify-between gap-3 p-4 pb-3">
@@ -207,16 +203,6 @@ function JobCard({
         </span>
       </div>
 
-      {/* Queued notice */}
-      {isQueued && (
-        <div className="mx-4 mb-3 flex items-start gap-2.5 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
-          <Clock className="w-4 h-4 text-cinema-text-dim flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-cinema-text-muted leading-relaxed">
-            Your download is queued — it will start automatically once a slot is free.
-          </p>
-        </div>
-      )}
-
       {/* Warning banner */}
       {job?.warning && (
         <div className="mx-4 mb-3 flex items-start gap-2.5 p-3 rounded-xl bg-cinema-warm/8 border border-cinema-warm/20">
@@ -226,12 +212,12 @@ function JobCard({
       )}
 
       {/* Notification */}
-      {job?.notification && !isQueued && (
+      {job?.notification && (
         <p className="px-4 pb-3 text-sm text-cinema-text-muted">{job.notification}</p>
       )}
 
       {/* Progress bars */}
-      {job && !isTerminal && !isQueued && (
+      {job && !isTerminal && (
         <div className="px-4 pb-3 space-y-3">
           {/* Download */}
           <div className="space-y-1.5">
@@ -382,7 +368,7 @@ export default function UploadPage() {
         .from('ingest_jobs')
         .select('*')
         .eq('user_id', user.id)
-        .in('status', ['pending', 'submitted', 'queued', 'running', 'uploading'])
+        .in('status', ['pending', 'submitted', 'running', 'uploading'])
         .order('created_at', { ascending: false });
 
       if (!rows?.length) return;
@@ -416,7 +402,7 @@ export default function UploadPage() {
         });
       }
 
-      // Mark stale jobs as failed so they don't block the queue forever
+      // Mark stale jobs as failed so they don't linger forever
       if (staleIds.length > 0) {
         await supabase
           .from('ingest_jobs')
@@ -460,7 +446,7 @@ export default function UploadPage() {
       case 'cancelled':  return 'Cancelled';
       case 'uploading':  return 'Uploading to storage';
       case 'running':    return 'Downloading to servers';
-      default:           return 'Queued';
+      default:           return 'Fetching torrent info';
     }
   }
 

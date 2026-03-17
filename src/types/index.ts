@@ -26,7 +26,6 @@ export type VideoQuality = '480p' | '720p' | '1080p' | '4K';
 export type IngestMethod = 'direct_upload' | 'torrent';
 
 export type TorrentJobStage =
-  | 'Queued'
   | 'Fetching torrent info'
   | 'Downloading to servers'
   | 'Uploading to storage'

@@ -720,3 +720,14 @@ SET status = 'failed',
     finished_at = now()
 WHERE status IN ('pending', 'submitted', 'queued', 'running', 'uploading')
   AND created_at < now() - INTERVAL '2 hours';
+
+
+  SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'ingest_jobs'::regclass;
+
+UPDATE ingest_jobs
+SET status = 'failed',
+    error = 'Job was queued but queue system was removed',
+    finished_at = now()
+WHERE status = 'queued';

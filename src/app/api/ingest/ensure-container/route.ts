@@ -59,6 +59,12 @@ export async function POST() {
     if (state?.container_ip) {
       const healthy = await waitForHealth(state.container_ip, POLL_INTERVAL_MS * 2);
       if (healthy) return NextResponse.json({ ip: state.container_ip });
+
+      // IP is stale — clear it before proceeding
+      await supabaseAdmin
+        .from('container_state')
+        .update({ container_ip: null, updated_at: new Date().toISOString() })
+        .eq('id', 1);
     }
 
     // 4. Container is unreachable or no IP — we need to start it
@@ -75,7 +81,8 @@ export async function POST() {
         // Container exists but stopped — start it (reuses existing secret)
         await startContainer();
       } else {
-        // Container doesn't exist or no stored secret — delete if stale, then create fresh
+        // Container doesn't exist, is running but unhealthy, or no stored secret
+        // — delete if present, then create fresh
         if (azureState.exists) {
           await deleteContainer();
         }
