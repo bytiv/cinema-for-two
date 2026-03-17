@@ -434,16 +434,59 @@ export default function UploadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Cleanup EventSources on unmount ────────────────────────
+  // ── Cleanup EventSources and poll intervals on unmount ──
   useEffect(() => {
     return () => {
       Object.values(esRefs.current).forEach((es) => es.close());
+      Object.values(pollIntervals.current).forEach((id) => clearInterval(id));
     };
   }, []);
 
   // ─────────────────────────────────────────────────────────
-  // SSE stream attachment
+  // SSE stream attachment with polling fallback
   // ─────────────────────────────────────────────────────────
+  const pollIntervals = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+
+  function _startPolling(jobId: string) {
+    if (pollIntervals.current[jobId]) return;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/ingest/status/${jobId}`);
+        if (!res.ok) return;
+        const job: TorrentJob & { movie_id?: string } = await res.json();
+
+        // If we got an error from the status endpoint, skip
+        if ((job as any).error) return;
+
+        setActiveJobs((prev) =>
+          prev.map((aj) =>
+            aj.jobId === jobId
+              ? { ...aj, job, movieId: job.movie_id ?? aj.movieId }
+              : aj,
+          ),
+        );
+
+        if (TERMINAL.has(job.stage)) {
+          clearInterval(pollIntervals.current[jobId]);
+          delete pollIntervals.current[jobId];
+          setTab('jobs');
+        }
+      } catch {}
+    };
+
+    // Poll immediately, then every 3 seconds
+    poll();
+    pollIntervals.current[jobId] = setInterval(poll, 3000);
+  }
+
+  function _stopPolling(jobId: string) {
+    if (pollIntervals.current[jobId]) {
+      clearInterval(pollIntervals.current[jobId]);
+      delete pollIntervals.current[jobId];
+    }
+  }
+
   function _attachStream(
     jobId: string,
     title: string,
@@ -451,7 +494,12 @@ export default function UploadPage() {
   ) {
     if (esRefs.current[jobId]) return;
 
-    // Stream goes through our Next.js proxy route from Stage 4
+    let receivedRealEvent = false;
+
+    // Start polling as a fallback immediately — SSE will take over if it works
+    _startPolling(jobId);
+
+    // Stream goes through our Next.js proxy route
     const es = new EventSource(`/api/ingest/status/${jobId}/stream`);
     esRefs.current[jobId] = es;
 
@@ -463,25 +511,15 @@ export default function UploadPage() {
         if (parsed.error) {
           es.close();
           delete esRefs.current[jobId];
-          setActiveJobs((prev) =>
-            prev.map((aj) =>
-              aj.jobId === jobId && (!aj.job || !TERMINAL.has(aj.job.stage))
-                ? {
-                    ...aj,
-                    job: {
-                      job_id: jobId,
-                      info_hash: aj.hash,
-                      stage: 'Failed' as const,
-                      download_percent: aj.job?.download_percent ?? 0,
-                      upload_percent: aj.job?.upload_percent ?? 0,
-                      notification: parsed.error,
-                      error_code: 'service_error',
-                    } as TorrentJob,
-                  }
-                : aj,
-            ),
-          );
+          // Don't mark as failed — let polling continue to get real status
+          // Only mark failed if polling is also not getting results
           return;
+        }
+
+        // We got a real event — stop polling, SSE is working
+        if (!receivedRealEvent) {
+          receivedRealEvent = true;
+          _stopPolling(jobId);
         }
 
         const job: TorrentJob & { movie_id?: string } = parsed;
@@ -495,49 +533,28 @@ export default function UploadPage() {
         if (TERMINAL.has(job.stage)) {
           es.close();
           delete esRefs.current[jobId];
+          _stopPolling(jobId);
           setTab('jobs');
         }
       } catch {}
     };
 
     let retryCount = 0;
-    const MAX_RETRIES = 2;
+    const MAX_RETRIES = 1;
 
     es.onerror = () => {
       es.close();
       delete esRefs.current[jobId];
 
-      // Check if job is already terminal — if so, no need to retry or error
-      const currentJob = activeJobs.find((aj) => aj.jobId === jobId);
-      if (currentJob?.job && TERMINAL.has(currentJob.job.stage)) return;
-
+      // Polling is still running as fallback, so don't mark as failed immediately.
+      // Only retry SSE once — polling will carry the load.
       if (retryCount < MAX_RETRIES) {
         retryCount++;
-        // Retry after a short delay
         setTimeout(() => {
           _attachStream(jobId, title, meta);
-        }, 3000 * retryCount);
-      } else {
-        // All retries exhausted — mark as failed in the UI
-        setActiveJobs((prev) =>
-          prev.map((aj) =>
-            aj.jobId === jobId && (!aj.job || !TERMINAL.has(aj.job.stage))
-              ? {
-                  ...aj,
-                  job: {
-                    job_id: jobId,
-                    info_hash: aj.hash,
-                    stage: 'Failed' as const,
-                    download_percent: aj.job?.download_percent ?? 0,
-                    upload_percent: aj.job?.upload_percent ?? 0,
-                    notification: 'Lost connection to ingest service. The download may still be running — refresh the page to check.',
-                    error_code: 'stream_disconnected',
-                  } as TorrentJob,
-                }
-              : aj,
-          ),
-        );
+        }, 5000);
       }
+      // If SSE keeps failing, polling continues — no need to show error
     };
   }
 

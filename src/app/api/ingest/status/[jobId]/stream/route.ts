@@ -125,10 +125,29 @@ export async function GET(
       const push  = (chunk: string) => controller.enqueue(encoder.encode(chunk));
       const close = () => { try { controller.close(); } catch {} };
 
+      // Send a connection confirmation so the client knows the stream is alive
+      push(': connected\n\n');
+
+      // Keepalive: if no data from upstream for 60s, close with an error
+      let lastActivity = Date.now();
+      const keepaliveInterval = setInterval(() => {
+        const elapsed = Date.now() - lastActivity;
+        if (elapsed > 60_000) {
+          clearInterval(keepaliveInterval);
+          push(`data: {"error":"No updates from ingest service for 60s — connection may be stale"}\n\n`);
+          syncJobStatus(jobId, 'Failed');
+          close();
+          return;
+        }
+        // Send SSE comment as keepalive to prevent proxy/browser timeout
+        push(': keepalive\n\n');
+      }, 15_000);
+
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          lastActivity = Date.now();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -179,25 +198,26 @@ export async function GET(
                 const enriched = { ...job, movie_id: movieId };
                 push(`data: ${JSON.stringify(enriched)}\n\n`);
 
-                if (TERMINAL.has(job.stage)) { close(); return; }
+                if (TERMINAL.has(job.stage)) { clearInterval(keepaliveInterval); close(); return; }
                 continue;
               } catch (saveErr: any) {
                 console.error('[ingest/stream] saveIngestMovie failed:', saveErr.message);
                 // Forward original event even if save failed
                 push(`data: ${raw}\n\n`);
-                if (TERMINAL.has(job.stage)) { close(); return; }
+                if (TERMINAL.has(job.stage)) { clearInterval(keepaliveInterval); close(); return; }
                 continue;
               }
             }
 
             // ── Forward as-is ──────────────────────────────────────
             push(`data: ${raw}\n\n`);
-            if (TERMINAL.has(job.stage)) { close(); return; }
+            if (TERMINAL.has(job.stage)) { clearInterval(keepaliveInterval); close(); return; }
           }
         }
       } catch (err) {
         console.error('[ingest/stream] stream error:', err);
       } finally {
+        clearInterval(keepaliveInterval);
         close();
       }
     },
