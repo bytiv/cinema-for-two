@@ -3,11 +3,7 @@
  *
  * SSE proxy — pipes the Python container's event stream to the browser.
  *
- * Intercepts each event to:
- *   1. Detect when the job reaches "Ready"
- *   2. Auto-save the movie row via saveIngestMovie
- *   3. Enrich the forwarded event with movie_id so the client can
- *      show "Watch now" immediately
+ * Now resolves container IP + HMAC secret per-job from ingest_jobs table.
  */
 
 import { NextRequest }         from 'next/server';
@@ -57,47 +53,45 @@ function syncJobStatus(jobId: string, stage: string) {
     });
 }
 
-async function getLiveIP(): Promise<string | null> {
-  const { data } = await supabaseAdmin
-    .from('container_state')
-    .select('container_ip')
-    .eq('id', 1)
-    .single();
-  return data?.container_ip ?? null;
-}
-
 export async function GET(
   _req: NextRequest,
   { params }: { params: { jobId: string } },
 ) {
   const { jobId } = params;
 
-  const ip = await getLiveIP();
-  if (!ip) {
-    // No container IP — mark the job as failed if it's still active
-    syncJobStatus(jobId, 'Failed');
-    return new Response('data: {"error":"Ingest service is not running"}\n\n', {
+  // Look up this job's container IP and HMAC secret
+  const { data: jobRow } = await supabaseAdmin
+    .from('ingest_jobs')
+    .select('user_id, hash, movie_name, metadata, status, container_ip, hmac_secret')
+    .eq('id', jobId)
+    .single();
+
+  if (!jobRow) {
+    return new Response('data: {"error":"Job not found"}\n\n', {
       headers: { 'Content-Type': 'text/event-stream' },
     });
   }
 
-  // Fetch the job row to get user_id, movie_name, and metadata
-  const { data: jobRow } = await supabaseAdmin
-    .from('ingest_jobs')
-    .select('user_id, hash, movie_name, metadata, status')
-    .eq('id', jobId)
-    .single();
-
-  // If the job is already completed/failed/cancelled, don't bother connecting upstream
-  if (jobRow && ['completed', 'failed', 'cancelled'].includes(jobRow.status)) {
+  // If the job is already terminal, don't bother connecting upstream
+  if (['completed', 'failed', 'cancelled'].includes(jobRow.status)) {
     return new Response(`data: {"error":"Job is already ${jobRow.status}"}\n\n`, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  const ip         = jobRow.container_ip;
+  const hmacSecret = jobRow.hmac_secret;
+
+  if (!ip || !hmacSecret) {
+    syncJobStatus(jobId, 'Failed');
+    return new Response('data: {"error":"Ingest container is not running for this job"}\n\n', {
       headers: { 'Content-Type': 'text/event-stream' },
     });
   }
 
   let upstream: Response;
   try {
-    upstream = await getIngestJobStream(ip, jobId);
+    upstream = await getIngestJobStream(ip, hmacSecret, jobId);
   } catch (err: any) {
     syncJobStatus(jobId, 'Failed');
     return new Response(`data: {"error":"${err.message}"}\n\n`, {
@@ -201,7 +195,6 @@ export async function GET(
                 continue;
               } catch (saveErr: any) {
                 console.error('[ingest/stream] saveIngestMovie failed:', saveErr.message);
-                // Forward original event even if save failed
                 push(`data: ${raw}\n\n`);
                 if (TERMINAL.has(job.stage)) { clearInterval(keepaliveInterval); close(); return; }
                 continue;

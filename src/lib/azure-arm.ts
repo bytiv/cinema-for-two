@@ -11,20 +11,22 @@ function getClient() {
   return new ContainerInstanceManagementClient(credential, subscriptionId);
 }
 
-const RG             = process.env.AZURE_RESOURCE_GROUP!;
-const CONTAINER_NAME = process.env.AZURE_CONTAINER_NAME!;
+const RG             = process.env.AZURE_RESOURCE_GROUP ?? 'cinema-ingest-rg';
 const CPU            = parseFloat(process.env.CONTAINER_CPU    ?? '0.5');
 const MEMORY         = parseFloat(process.env.CONTAINER_MEMORY ?? '1.5');
 const NEXT_JS_URL    = process.env.NEXTAUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
-export async function getContainerState(): Promise<{
+/**
+ * Check if a specific container group exists and is running.
+ */
+export async function getContainerState(containerName: string): Promise<{
   exists: boolean;
   running: boolean;
   ip: string | null;
 }> {
   try {
     const client = getClient();
-    const group  = await client.containerGroups.get(RG, CONTAINER_NAME);
+    const group  = await client.containerGroups.get(RG, containerName);
     const state  = group.instanceView?.state?.toLowerCase();
     const ip     = group.ipAddress?.ip ?? null;
     return {
@@ -40,12 +42,12 @@ export async function getContainerState(): Promise<{
   }
 }
 
-export async function startContainer(): Promise<void> {
-  const client = getClient();
-  await client.containerGroups.beginStartAndWait(RG, CONTAINER_NAME);
-}
-
-export async function createContainer(
+/**
+ * Create a new container group with a unique name for a specific job.
+ * Each job gets its own isolated container that will self-delete after idle.
+ */
+export async function createJobContainer(
+  containerName:       string,
   hmacSecret:          string,
   storageAccount:      string,
   storageKey:          string,
@@ -54,7 +56,7 @@ export async function createContainer(
 ): Promise<void> {
   const client = getClient();
 
-  await client.containerGroups.beginCreateOrUpdateAndWait(RG, CONTAINER_NAME, {
+  await client.containerGroups.beginCreateOrUpdateAndWait(RG, containerName, {
     location:      'centralindia',
     osType:        'Linux',
     restartPolicy: 'Never',
@@ -63,7 +65,7 @@ export async function createContainer(
       ports: [{ protocol: 'TCP', port: 8000 }],
     },
     containers: [{
-      name:  CONTAINER_NAME,
+      name:  containerName,
       image: 'belal0gebaly/cinema-ingest:latest',
       resources: {
         requests: { cpu: CPU, memoryInGB: MEMORY },
@@ -81,20 +83,26 @@ export async function createContainer(
         { name: 'AZURE_SP_TENANT_ID',     secureValue:  process.env.AZURE_SP_TENANT_ID! },
         { name: 'AZURE_SUBSCRIPTION_ID',  secureValue:  process.env.AZURE_SUBSCRIPTION_ID! },
         { name: 'AZURE_RESOURCE_GROUP',   value:        RG },
-        { name: 'AZURE_CONTAINER_NAME',   value:        CONTAINER_NAME },
-        { name: 'IDLE_SHUTDOWN_SECONDS',  value:        process.env.IDLE_SHUTDOWN_SECONDS ?? '180' },
+        { name: 'AZURE_CONTAINER_NAME',   value:        containerName },
+        { name: 'IDLE_SHUTDOWN_SECONDS',  value:        process.env.IDLE_SHUTDOWN_SECONDS ?? '300' },
       ],
     }],
   });
 }
 
-export async function getContainerIP(): Promise<string | null> {
+/**
+ * Get the public IP of a specific container group.
+ */
+export async function getContainerIP(containerName: string): Promise<string | null> {
   const client = getClient();
-  const group  = await client.containerGroups.get(RG, CONTAINER_NAME);
+  const group  = await client.containerGroups.get(RG, containerName);
   return group.ipAddress?.ip ?? null;
 }
 
-export async function deleteContainer(): Promise<void> {
+/**
+ * Delete a specific container group.
+ */
+export async function deleteContainer(containerName: string): Promise<void> {
   const client = getClient();
-  await client.containerGroups.beginDeleteAndWait(RG, CONTAINER_NAME);
+  await client.containerGroups.beginDeleteAndWait(RG, containerName);
 }

@@ -1,7 +1,6 @@
 /**
  * Server-side client for the Python Media Ingest API.
- * IP is resolved dynamically from Supabase — no static INGEST_API_URL needed.
- * HMAC secret is generated per-container and stored in Supabase container_state.
+ * IP and HMAC secret are resolved per-job from ingest_jobs table.
  */
 
 import { createHmac } from 'crypto';
@@ -13,30 +12,6 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-// ── HMAC secret cache (avoid hitting Supabase on every request) ─────────────
-let _cachedSecret = '';
-let _cachedAt = 0;
-const CACHE_TTL_MS = 30_000; // 30 seconds
-
-async function getHmacSecret(): Promise<string> {
-  const now = Date.now();
-  if (_cachedSecret && now - _cachedAt < CACHE_TTL_MS) return _cachedSecret;
-
-  const { data } = await supabaseAdmin
-    .from('container_state')
-    .select('hmac_secret')
-    .eq('id', 1)
-    .single();
-
-  _cachedSecret = data?.hmac_secret ?? '';
-  _cachedAt = now;
-
-  if (!_cachedSecret) {
-    console.warn('[ingest-api] No HMAC secret in container_state — requests will be rejected');
-  }
-  return _cachedSecret;
-}
-
 // ── HMAC-HS256 JWT ─────────────────────────────────────────────────────────
 
 function b64url(value: Buffer | string): string {
@@ -44,8 +19,7 @@ function b64url(value: Buffer | string): string {
   return buf.toString('base64url');
 }
 
-async function makeIngestToken(): Promise<string> {
-  const secret = await getHmacSecret();
+function makeIngestTokenWithSecret(secret: string): string {
   const now     = Math.floor(Date.now() / 1000);
   const header  = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64url(JSON.stringify({ sub: 'ingest', iat: now, exp: now + 300 }));
@@ -54,10 +28,10 @@ async function makeIngestToken(): Promise<string> {
   return `${signing}.${b64url(sig)}`;
 }
 
-async function authHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
+function authHeadersWithSecret(secret: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
     'Content-Type':  'application/json',
-    'Authorization': `Bearer ${await makeIngestToken()}`,
+    'Authorization': `Bearer ${makeIngestTokenWithSecret(secret)}`,
     ...extra,
   };
 }
@@ -76,6 +50,22 @@ async function expectJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ── Helper: get job's container info from Supabase ────────────────────────
+
+export async function getJobContainerInfo(jobId: string): Promise<{
+  ip: string;
+  hmacSecret: string;
+} | null> {
+  const { data } = await supabaseAdmin
+    .from('ingest_jobs')
+    .select('container_ip, hmac_secret')
+    .eq('id', jobId)
+    .single();
+
+  if (!data?.container_ip || !data?.hmac_secret) return null;
+  return { ip: data.container_ip, hmacSecret: data.hmac_secret };
+}
+
 // ── Request type ───────────────────────────────────────────────────────────
 
 export interface IngestJobRequest {
@@ -90,40 +80,41 @@ export interface IngestJobRequest {
   trackers?:       string[];
 }
 
-// ── API calls (all accept a live IP) ──────────────────────────────────────
+// ── API calls (all accept ip + hmacSecret directly) ──────────────────────
 
 export async function startIngestJob(
   ip: string,
+  hmacSecret: string,
   req: IngestJobRequest,
 ): Promise<{ job_id: string; stage: string }> {
   const res = await fetch(`http://${ip}:8000/download`, {
     method:  'POST',
-    headers: await authHeaders(),
+    headers: authHeadersWithSecret(hmacSecret),
     body:    JSON.stringify(req),
     cache:   'no-store',
   });
   return expectJson(res);
 }
 
-export async function getIngestJobStatus(ip: string, jobId: string): Promise<TorrentJob> {
+export async function getIngestJobStatus(ip: string, hmacSecret: string, jobId: string): Promise<TorrentJob> {
   const res = await fetch(`http://${ip}:8000/status/${jobId}`, {
-    headers: await authHeaders(),
+    headers: authHeadersWithSecret(hmacSecret),
     cache:   'no-store',
   });
   return expectJson(res);
 }
 
-export async function cancelIngestJob(ip: string, jobId: string): Promise<TorrentJob> {
+export async function cancelIngestJob(ip: string, hmacSecret: string, jobId: string): Promise<TorrentJob> {
   const res = await fetch(`http://${ip}:8000/jobs/${jobId}`, {
     method:  'DELETE',
-    headers: await authHeaders(),
+    headers: authHeadersWithSecret(hmacSecret),
   });
   return expectJson(res);
 }
 
-export async function getIngestJobStream(ip: string, jobId: string): Promise<Response> {
+export async function getIngestJobStream(ip: string, hmacSecret: string, jobId: string): Promise<Response> {
   return fetch(`http://${ip}:8000/status/${jobId}/stream`, {
-    headers: await authHeaders({ Accept: 'text/event-stream' }),
+    headers: authHeadersWithSecret(hmacSecret, { Accept: 'text/event-stream' }),
     cache:   'no-store',
   });
 }
