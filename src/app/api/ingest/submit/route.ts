@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient }              from '@supabase/supabase-js';
+import { randomBytes }               from 'crypto';
 import { startIngestJob }            from '@/lib/ingest-api';
+import { createJobContainer, getContainerIP } from '@/lib/azure-arm';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 
-const MAX_USER_JOBS = parseInt(process.env.MAX_USER_JOBS ?? '2', 10);
+const POLL_INTERVAL_MS   = 3_000;
+const STARTUP_TIMEOUT_MS = 120_000;  // 2 minutes for container to come up
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,17 +19,16 @@ async function getAuthenticatedUser() {
   return user;
 }
 
-async function ensureContainer(): Promise<string> {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_APP_URL}/api/ingest/ensure-container`,
-    { method: 'POST', cache: 'no-store' },
-  );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? 'Failed to start the service');
+async function waitForHealth(ip: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://${ip}:8000/health`, { cache: 'no-store' });
+      if (res.ok) return true;
+    } catch {}
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
   }
-  const { ip } = await res.json();
-  return ip;
+  return false;
 }
 
 export async function POST(req: NextRequest) {
@@ -61,31 +63,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Check user's active job count (pending/submitted/running/uploading)
-    const { count } = await supabaseAdmin
-      .from('ingest_jobs')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .in('status', ['pending', 'submitted', 'running', 'uploading']);
+    // 2. Generate per-job HMAC secret and container name
+    const hmacSecret    = randomBytes(32).toString('hex');
+    const shortId       = randomBytes(4).toString('hex'); // 8 chars
+    const containerName = `ingest-${shortId}`;
 
-    if ((count ?? 0) >= MAX_USER_JOBS) {
-      return NextResponse.json(
-        {
-          error: `You already have ${MAX_USER_JOBS} active jobs. Wait for one to finish before submitting.`,
-        },
-        { status: 429 },
-      );
-    }
-
-    // 3. Persist job as 'pending' — source of truth from this point
+    // 3. Persist job as 'pending' with container info
     const { data: job, error: insertError } = await supabaseAdmin
       .from('ingest_jobs')
       .insert({
-        user_id:    user.id,
+        user_id:        user.id,
         hash,
         movie_name,
-        status:     'pending',
-        metadata:   metadata ?? {},
+        status:         'pending',
+        metadata:       metadata ?? {},
+        container_name: containerName,
+        container_rg:   process.env.AZURE_RESOURCE_GROUP ?? 'cinema-ingest-rg',
+        hmac_secret:    hmacSecret,
       })
       .select('id')
       .single();
@@ -94,22 +88,61 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to create job record' }, { status: 500 });
     }
 
-    // 4. Ensure container is running — get live IP
-    let ip: string;
+    // 4. Create a dedicated container for this job
     try {
-      ip = await ensureContainer();
+      await createJobContainer(
+        containerName,
+        hmacSecret,
+        process.env.AZURE_STORAGE_ACCOUNT_NAME!,
+        process.env.AZURE_STORAGE_ACCOUNT_KEY!,
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      );
     } catch (err: any) {
-      // Container failed to start — delete the pending job, no trace left
+      // Container failed to create — clean up the pending job
       await supabaseAdmin.from('ingest_jobs').delete().eq('id', job.id);
       return NextResponse.json(
-        { error: err.message ?? 'Failed to start the service. Please try again.' },
+        { error: err.message ?? 'Failed to create ingest container. Please try again.' },
         { status: 503 },
       );
     }
 
-    // 5. Submit job to Python container
+    // 5. Poll for IP
+    let ip: string | null = null;
+    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      ip = await getContainerIP(containerName);
+      if (ip) break;
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    }
+
+    if (!ip) {
+      await supabaseAdmin.from('ingest_jobs').delete().eq('id', job.id);
+      return NextResponse.json(
+        { error: 'Container started but no IP assigned. Please try again.' },
+        { status: 503 },
+      );
+    }
+
+    // 6. Wait for container health
+    const healthy = await waitForHealth(ip, STARTUP_TIMEOUT_MS);
+    if (!healthy) {
+      await supabaseAdmin.from('ingest_jobs').delete().eq('id', job.id);
+      return NextResponse.json(
+        { error: 'Container health check timed out. Please try again.' },
+        { status: 503 },
+      );
+    }
+
+    // 7. Store IP in the job row
+    await supabaseAdmin
+      .from('ingest_jobs')
+      .update({ container_ip: ip })
+      .eq('id', job.id);
+
+    // 8. Submit job to Python container
     try {
-      await startIngestJob(ip, {
+      await startIngestJob(ip, hmacSecret, {
         job_id:          job.id,
         hash,
         name:            movie_name,
@@ -121,15 +154,22 @@ export async function POST(req: NextRequest) {
         trackers,
       });
     } catch (err: any) {
-      // Python rejected it — delete pending job
-      await supabaseAdmin.from('ingest_jobs').delete().eq('id', job.id);
+      // Python rejected it — clean up
+      await supabaseAdmin
+        .from('ingest_jobs')
+        .update({
+          status: 'failed',
+          error: err.message ?? 'Failed to submit job to ingest service',
+          finished_at: new Date().toISOString(),
+        })
+        .eq('id', job.id);
       return NextResponse.json(
         { error: err.message ?? 'Failed to submit job to ingest service' },
         { status: 502 },
       );
     }
 
-    // 6. Mark as submitted
+    // 9. Mark as submitted
     await supabaseAdmin
       .from('ingest_jobs')
       .update({ status: 'submitted' })
