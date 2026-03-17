@@ -347,6 +347,7 @@ export default function UploadPage() {
 
   // ── Active jobs state ──────────────────────────────────────
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
+  const esRefs = useRef<Record<string, EventSource>>({});
 
   // ── Restore in-progress jobs from Supabase on mount ───────
   useEffect(() => {
@@ -419,17 +420,127 @@ export default function UploadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Cleanup poll intervals on unmount ────────────────────
+  // ── Cleanup EventSources and poll intervals on unmount ──
   useEffect(() => {
     return () => {
+      Object.values(esRefs.current).forEach((es) => es.close());
       Object.values(pollIntervals.current).forEach((id) => clearInterval(id));
     };
   }, []);
 
   // ─────────────────────────────────────────────────────────
-  // Job tracking — polls both Python container and Supabase
+  // SSE stream attachment with polling fallback
   // ─────────────────────────────────────────────────────────
   const pollIntervals = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+
+  function _startPolling(jobId: string) {
+    if (pollIntervals.current[jobId]) return;
+
+    let consecutiveErrors = 0;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/ingest/status/${jobId}`);
+
+        if (!res.ok || res.status === 502 || res.status === 503) {
+          // Python container is likely down — fall back to Supabase
+          consecutiveErrors++;
+          if (consecutiveErrors >= 3) {
+            await _pollSupabaseFallback(jobId);
+          }
+          return;
+        }
+
+        const data = await res.json();
+
+        // If the status endpoint returned an error (container doesn't know this job),
+        // fall back to checking Supabase directly
+        if (data.error) {
+          consecutiveErrors++;
+          if (consecutiveErrors >= 2) {
+            await _pollSupabaseFallback(jobId);
+          }
+          return;
+        }
+
+        // Got a real status from the Python container
+        consecutiveErrors = 0;
+        const job: TorrentJob & { movie_id?: string } = data;
+
+        setActiveJobs((prev) =>
+          prev.map((aj) =>
+            aj.jobId === jobId
+              ? { ...aj, job, movieId: job.movie_id ?? aj.movieId }
+              : aj,
+          ),
+        );
+
+        if (TERMINAL.has(job.stage)) {
+          clearInterval(pollIntervals.current[jobId]);
+          delete pollIntervals.current[jobId];
+          setTab('jobs');
+        }
+      } catch {
+        consecutiveErrors++;
+        if (consecutiveErrors >= 3) {
+          await _pollSupabaseFallback(jobId);
+        }
+      }
+    };
+
+    // Poll immediately, then every 3 seconds
+    poll();
+    pollIntervals.current[jobId] = setInterval(poll, 3000);
+  }
+
+  /** When the Python container is gone, check ingest_jobs in Supabase for the real status */
+  async function _pollSupabaseFallback(jobId: string) {
+    try {
+      const { data: row, error } = await supabase
+        .from('ingest_jobs')
+        .select('status, error, movie_name')
+        .eq('id', jobId)
+        .single();
+
+      if (error || !row) return;
+
+      const statusToStage: Record<string, string> = {
+        completed:  'Ready',
+        failed:     'Failed',
+        cancelled:  'Cancelled',
+        running:    'Downloading to servers',
+        uploading:  'Uploading to storage',
+        submitted:  'Fetching torrent info',
+        pending:    'Fetching torrent info',
+      };
+
+      const stage = statusToStage[row.status] ?? 'Fetching torrent info';
+
+      setActiveJobs((prev) =>
+        prev.map((aj) =>
+          aj.jobId === jobId
+            ? {
+                ...aj,
+                job: {
+                  job_id: jobId,
+                  info_hash: aj.hash,
+                  stage,
+                  download_percent: stage === 'Ready' ? 100 : (aj.job?.download_percent ?? 0),
+                  upload_percent: stage === 'Ready' ? 100 : (aj.job?.upload_percent ?? 0),
+                  notification: row.error ?? (stage === 'Ready' ? 'Download complete' : undefined),
+                  error_code: stage === 'Failed' ? 'container_lost' : undefined,
+                } as TorrentJob,
+              }
+            : aj,
+        ),
+      );
+
+      if (['Ready', 'Failed', 'Cancelled'].includes(stage)) {
+        _stopPolling(jobId);
+        setTab('jobs');
+      }
+    } catch {}
+  }
 
   function _stopPolling(jobId: string) {
     if (pollIntervals.current[jobId]) {
@@ -438,99 +549,75 @@ export default function UploadPage() {
     }
   }
 
-  /** Map ingest_jobs.status → UI stage name */
-  function dbStatusToStage(status: string): string {
-    switch (status) {
-      case 'completed':  return 'Ready';
-      case 'failed':     return 'Failed';
-      case 'cancelled':  return 'Cancelled';
-      case 'uploading':  return 'Uploading to storage';
-      case 'running':    return 'Downloading to servers';
-      default:           return 'Fetching torrent info';
-    }
-  }
-
   function _attachStream(
     jobId: string,
-    _title: string,
-    _meta: ActiveJob['streamMeta'],
+    title: string,
+    meta:  ActiveJob['streamMeta'],
   ) {
-    if (pollIntervals.current[jobId]) return;
+    if (esRefs.current[jobId]) return;
 
-    let useSupabase = false; // flip to true after container errors
+    let receivedRealEvent = false;
 
-    const poll = async () => {
-      // ── Strategy 1: Ask the Python container directly ────────
-      if (!useSupabase) {
-        try {
-          const res = await fetch(`/api/ingest/status/${jobId}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (!data.error) {
-              const job: TorrentJob & { movie_id?: string } = data;
-              setActiveJobs((prev) =>
-                prev.map((aj) =>
-                  aj.jobId === jobId
-                    ? { ...aj, job, movieId: job.movie_id ?? aj.movieId }
-                    : aj,
-                ),
-              );
-              if (TERMINAL.has(job.stage)) {
-                _stopPolling(jobId);
-                setTab('jobs');
-              }
-              return; // success — done for this tick
-            }
-          }
-          // Container returned an error or non-ok — switch to Supabase
-          useSupabase = true;
-        } catch {
-          useSupabase = true;
-        }
-      }
+    // Start polling as a fallback immediately — SSE will take over if it works
+    _startPolling(jobId);
 
-      // ── Strategy 2: Read ingest_jobs from Supabase ───────────
+    // Stream goes through our Next.js proxy route
+    const es = new EventSource(`/api/ingest/status/${jobId}/stream`);
+    esRefs.current[jobId] = es;
+
+    es.onmessage = (e) => {
       try {
-        const { data: row, error } = await supabase
-          .from('ingest_jobs')
-          .select('status, error, movie_name')
-          .eq('id', jobId)
-          .single();
+        const parsed = JSON.parse(e.data);
 
-        if (error || !row) return;
+        // Handle error events from the stream route
+        if (parsed.error) {
+          es.close();
+          delete esRefs.current[jobId];
+          // Don't mark as failed — let polling continue to get real status
+          // Only mark failed if polling is also not getting results
+          return;
+        }
 
-        const stage = dbStatusToStage(row.status);
+        // We got a real event — stop polling, SSE is working
+        if (!receivedRealEvent) {
+          receivedRealEvent = true;
+          _stopPolling(jobId);
+        }
 
+        const job: TorrentJob & { movie_id?: string } = parsed;
         setActiveJobs((prev) =>
           prev.map((aj) =>
             aj.jobId === jobId
-              ? {
-                  ...aj,
-                  job: {
-                    job_id:           jobId,
-                    info_hash:        aj.hash,
-                    stage,
-                    download_percent: stage === 'Ready' ? 100 : (aj.job?.download_percent ?? 0),
-                    upload_percent:   stage === 'Ready' ? 100 : (aj.job?.upload_percent ?? 0),
-                    notification:     row.error ?? (stage === 'Ready' ? 'Download complete' : undefined),
-                    error_code:       stage === 'Failed' ? (row.error ? 'ingest_error' : 'unknown') : undefined,
-                  } as TorrentJob,
-                  movieId: aj.movieId,
-                }
+              ? { ...aj, job, movieId: job.movie_id ?? aj.movieId }
               : aj,
           ),
         );
-
-        if (['Ready', 'Failed', 'Cancelled'].includes(stage)) {
+        if (TERMINAL.has(job.stage)) {
+          es.close();
+          delete esRefs.current[jobId];
           _stopPolling(jobId);
           setTab('jobs');
         }
       } catch {}
     };
 
-    // Poll immediately, then every 2 seconds
-    poll();
-    pollIntervals.current[jobId] = setInterval(poll, 2000);
+    let retryCount = 0;
+    const MAX_RETRIES = 1;
+
+    es.onerror = () => {
+      es.close();
+      delete esRefs.current[jobId];
+
+      // Polling is still running as fallback, so don't mark as failed immediately.
+      // Only retry SSE once — polling will carry the load.
+      if (retryCount < MAX_RETRIES) {
+        retryCount++;
+        setTimeout(() => {
+          _attachStream(jobId, title, meta);
+        }, 5000);
+      }
+      // If SSE keeps failing, polling continues — no need to show error
+    };
   }
 
   // ─────────────────────────────────────────────────────────
@@ -708,7 +795,8 @@ export default function UploadPage() {
     try {
       // Stage 4 cancel proxy route
       await fetch(`/api/ingest/cancel/${jobId}`, { method: 'DELETE' });
-      _stopPolling(jobId);
+      esRefs.current[jobId]?.close();
+      delete esRefs.current[jobId];
       setActiveJobs((prev) =>
         prev.map((aj) =>
           aj.jobId === jobId
