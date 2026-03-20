@@ -210,11 +210,19 @@ export function useVideoPreloader({ videoRef, src, enabled = true }: UseVideoPre
           setTimeout(() => {
             if (!video.paused && video.readyState < 3) {
               setState(prev => ({ ...prev, isRecovering: true }));
-              // Force reload from current position
+              // Force reload from current position.
+              // IMPORTANT: after load() the media pipeline resets completely.
+              // We must wait for the browser to re-parse the container before
+              // seeking and playing, otherwise the audio decoder may fail to
+              // reinitialise — resulting in video with no sound.
               const t = video.currentTime;
+              const onReady = () => {
+                video.removeEventListener('loadedmetadata', onReady);
+                video.currentTime = t;
+                video.play().catch(() => {});
+              };
+              video.addEventListener('loadedmetadata', onReady);
               video.load();
-              video.currentTime = t;
-              video.play().catch(() => {});
             }
           }, 2000);
         }

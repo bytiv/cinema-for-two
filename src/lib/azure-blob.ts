@@ -34,7 +34,7 @@ export async function ensureContainers() {
 const SAS_VERSION = '2021-12-02';
 
 // Generate a SAS URL for reading a blob (expires in 24 hours)
-export function generateReadSasUrl(containerName: string, blobName: string, expiresInHours = 24): string {
+export function generateReadSasUrl(containerName: string, blobName: string, expiresInHours = 24, contentType?: string): string {
   const sasToken = generateBlobSASQueryParameters(
     {
       containerName,
@@ -45,6 +45,11 @@ export function generateReadSasUrl(containerName: string, blobName: string, expi
       expiresOn: new Date(Date.now() + expiresInHours * 60 * 60 * 1000),
       protocol: SASProtocol.Https,
       version: SAS_VERSION,
+      // Override the Content-Type header in the response so the browser
+      // always receives the correct MIME type for the video — even when
+      // the blob was uploaded without one (e.g. torrent-ingested files
+      // that default to application/octet-stream).
+      contentType,
     },
     sharedKeyCredential
   ).toString();
