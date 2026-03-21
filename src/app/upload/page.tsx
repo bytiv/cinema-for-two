@@ -105,19 +105,21 @@ interface ActiveJob {
 const TERMINAL = new Set(['Ready', 'Failed', 'Cancelled']);
 
 function stageColor(stage: string) {
-  if (stage === 'Ready')                return 'text-cinema-success bg-cinema-success/10 border-cinema-success/20';
-  if (stage === 'Failed')               return 'text-cinema-error bg-cinema-error/10 border-cinema-error/20';
-  if (stage === 'Cancelled')            return 'text-cinema-text-dim bg-cinema-card border-cinema-border';
-  if (stage === 'Uploading to storage') return 'text-cinema-warm bg-cinema-warm/10 border-cinema-warm/20';
+  if (stage === 'Ready')                    return 'text-cinema-success bg-cinema-success/10 border-cinema-success/20';
+  if (stage === 'Failed')                   return 'text-cinema-error bg-cinema-error/10 border-cinema-error/20';
+  if (stage === 'Cancelled')                return 'text-cinema-text-dim bg-cinema-card border-cinema-border';
+  if (stage === 'Uploading to storage')     return 'text-cinema-warm bg-cinema-warm/10 border-cinema-warm/20';
+  if (stage === 'Transcoding for playback') return 'text-purple-400 bg-purple-400/10 border-purple-400/20';
   return 'text-cinema-secondary bg-cinema-secondary/10 border-cinema-secondary/20';
 }
 
 function stageIcon(stage: string) {
-  if (stage === 'Ready')                  return <CheckCircle className="w-3.5 h-3.5" />;
-  if (stage === 'Failed')                 return <AlertCircle className="w-3.5 h-3.5" />;
-  if (stage === 'Cancelled')              return <Ban className="w-3.5 h-3.5" />;
-  if (stage === 'Uploading to storage')   return <HardDrive className="w-3.5 h-3.5" />;
-  if (stage === 'Downloading to servers') return <Download className="w-3.5 h-3.5" />;
+  if (stage === 'Ready')                    return <CheckCircle className="w-3.5 h-3.5" />;
+  if (stage === 'Failed')                   return <AlertCircle className="w-3.5 h-3.5" />;
+  if (stage === 'Cancelled')                return <Ban className="w-3.5 h-3.5" />;
+  if (stage === 'Uploading to storage')     return <HardDrive className="w-3.5 h-3.5" />;
+  if (stage === 'Downloading to servers')   return <Download className="w-3.5 h-3.5" />;
+  if (stage === 'Transcoding for playback') return <Zap className="w-3.5 h-3.5" />;
   return <Loader2 className="w-3.5 h-3.5 animate-spin" />;
 }
 
@@ -199,7 +201,7 @@ function JobCard({
           stageColor(stage),
         )}>
           {stageIcon(stage)}
-          {stage}
+          {stage === 'Transcoding for playback' ? 'Optimizing' : stage}
         </span>
       </div>
 
@@ -267,6 +269,30 @@ function JobCard({
                   style={{ width: `${job.upload_percent}%` }}
                 />
               </div>
+            </div>
+          )}
+
+          {/* Optimizing — shown during transcoding stage */}
+          {job.stage === 'Transcoding for playback' && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5 text-cinema-text-dim">
+                  <Zap className="w-3 h-3" /> Optimizing for playback
+                </span>
+                <span className="font-mono text-purple-400">
+                  <Loader2 className="w-3 h-3 animate-spin inline mr-1" />
+                  Converting
+                </span>
+              </div>
+              <div className="h-1.5 bg-cinema-surface rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-purple-500 to-purple-400 rounded-full transition-all duration-700 ease-out animate-pulse"
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <p className="text-[11px] text-cinema-text-dim">
+                Making sure the audio and video work perfectly in your browser — usually takes a few seconds
+              </p>
             </div>
           )}
         </div>
@@ -505,13 +531,14 @@ export default function UploadPage() {
       if (error || !row) return;
 
       const statusToStage: Record<string, string> = {
-        completed:  'Ready',
-        failed:     'Failed',
-        cancelled:  'Cancelled',
-        running:    'Downloading to servers',
-        uploading:  'Uploading to storage',
-        submitted:  'Fetching torrent info',
-        pending:    'Fetching torrent info',
+        completed:    'Ready',
+        failed:       'Failed',
+        cancelled:    'Cancelled',
+        running:      'Downloading to servers',
+        transcoding:  'Transcoding for playback',
+        uploading:    'Uploading to storage',
+        submitted:    'Fetching torrent info',
+        pending:      'Fetching torrent info',
       };
 
       const stage = statusToStage[row.status] ?? 'Fetching torrent info';

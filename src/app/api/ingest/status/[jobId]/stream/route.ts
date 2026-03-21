@@ -23,6 +23,7 @@ function stageToStatus(stage: string): string | null {
   switch (stage) {
     case 'Fetching torrent info':     return 'running';
     case 'Downloading to servers':    return 'running';
+    case 'Transcoding for playback':  return 'transcoding';
     case 'Uploading to storage':      return 'uploading';
     case 'Ready':                     return 'completed';
     case 'Failed':                    return 'failed';

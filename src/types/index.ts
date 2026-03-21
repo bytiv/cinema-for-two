@@ -28,6 +28,7 @@ export type IngestMethod = 'direct_upload' | 'torrent';
 export type TorrentJobStage =
   | 'Fetching torrent info'
   | 'Downloading to servers'
+  | 'Transcoding for playback'
   | 'Uploading to storage'
   | 'Ready'
   | 'Failed'
