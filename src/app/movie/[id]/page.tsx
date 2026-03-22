@@ -60,6 +60,10 @@ function EditMovieModal({
   const [description, setDescription] = useState(movie.description ?? '');
   const [quality, setQuality] = useState<VideoQuality | null>(movie.quality ?? null);
   const [duration, setDuration] = useState<number | null>(movie.duration ?? null);
+  const [releaseDate, setReleaseDate] = useState(movie.release_date ?? '');
+  const [rating, setRating] = useState(movie.rating != null ? String(movie.rating) : '');
+  const [genres, setGenres] = useState(Array.isArray(movie.genres) ? movie.genres.join(', ') : '');
+  const [runtime, setRuntime] = useState(movie.runtime != null ? String(movie.runtime) : '');
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>(movie.subtitles ?? []);
   const [newEntries, setNewEntries] = useState<NewSubtitleEntry[]>([]);
   const [posterFile, setPosterFile] = useState<File | null>(null);
@@ -154,6 +158,10 @@ function EditMovieModal({
           description: description.trim() || null,
           quality: quality || null,
           duration: duration || null,
+          release_date: releaseDate.trim() || null,
+          rating: rating.trim() ? parseFloat(rating) : null,
+          genres: genres.trim() ? genres.split(',').map((g) => g.trim()).filter(Boolean) : null,
+          runtime: runtime.trim() ? parseInt(runtime, 10) : null,
           subtitles: allSubtitles,
           ...(newPosterUrl ? { poster_url: newPosterUrl } : {}),
         }),
@@ -274,6 +282,66 @@ function EditMovieModal({
                   <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Movie metadata */}
+          <div className="space-y-4 pt-2 border-t border-cinema-border/50">
+            <p className="text-xs text-cinema-text-dim">Movie metadata (optional)</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                  <Calendar className="w-3.5 h-3.5 text-cinema-warm" /> Release Date
+                </label>
+                <input
+                  type="date"
+                  value={releaseDate}
+                  onChange={(e) => setReleaseDate(e.target.value)}
+                  className="w-full rounded-xl bg-cinema-surface border border-cinema-border px-3 py-2.5 text-sm text-cinema-text focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                  <Star className="w-3.5 h-3.5 text-cinema-accent" /> Rating
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="10"
+                  placeholder="e.g. 8.5"
+                  value={rating}
+                  onChange={(e) => setRating(e.target.value)}
+                  className="w-full rounded-xl bg-cinema-surface border border-cinema-border px-3 py-2.5 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                  <Tag className="w-3.5 h-3.5 text-cinema-secondary" /> Genres
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Drama, Thriller"
+                  value={genres}
+                  onChange={(e) => setGenres(e.target.value)}
+                  className="w-full rounded-xl bg-cinema-surface border border-cinema-border px-3 py-2.5 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                  <Clock className="w-3.5 h-3.5 text-cinema-accent" /> Runtime <span className="text-cinema-text-dim text-xs font-normal">(min)</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="e.g. 148"
+                  value={runtime}
+                  onChange={(e) => setRuntime(e.target.value)}
+                  className="w-full rounded-xl bg-cinema-surface border border-cinema-border px-3 py-2.5 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                />
+              </div>
             </div>
           </div>
 

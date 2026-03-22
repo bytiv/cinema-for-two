@@ -16,7 +16,7 @@ import {
   Users, Zap, Ban, Loader2, ArrowRight, AlertTriangle, FolderOpen,
   Server, Wifi, WifiOff, Search, Star, Calendar, Tag,
 } from 'lucide-react';
-import type { TMDBSearchResult, TMDBMovieDetail } from '@/types';
+import type { TMDBSearchResult, TMDBMovieDetail, TorrentSearchResult } from '@/types';
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -371,6 +371,10 @@ export default function UploadPage() {
   const [torrentPosterPreview, setTorrentPosterPreview] = useState<string | null>(null);
   const [torrentError,         setTorrentError]         = useState('');
   const [submitPhase,          setSubmitPhase]          = useState<SubmitPhase>('idle');
+  const [torrentReleaseDate,   setTorrentReleaseDate]   = useState('');
+  const [torrentRating,        setTorrentRating]        = useState('');
+  const [torrentGenres,        setTorrentGenres]        = useState('');
+  const [torrentRuntime,       setTorrentRuntime]       = useState('');
 
   // ── TMDB search state ───────────────────────────────────────
   const [tmdbQuery,         setTmdbQuery]         = useState('');
@@ -381,6 +385,11 @@ export default function UploadPage() {
   const [tmdbLoadingDetail, setTmdbLoadingDetail] = useState(false);
   const [tmdbQuality,       setTmdbQuality]       = useState<VideoQuality | null>(null);
   const tmdbSearchTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Torrent source search state ─────────────────────────────
+  const [torrentSearchResults, setTorrentSearchResults] = useState<TorrentSearchResult[]>([]);
+  const [torrentSearching,     setTorrentSearching]     = useState(false);
+  const [torrentSearchError,   setTorrentSearchError]   = useState('');
 
   // ── Active jobs state ──────────────────────────────────────
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
@@ -768,12 +777,12 @@ export default function UploadPage() {
               quality:     torrentQuality ?? undefined,
               posterUrl,
               subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
-              // TMDB metadata (from search flow)
+              // TMDB / manual metadata
               tmdb_id:      selectedTmdb?.tmdb_id ?? undefined,
-              release_date: selectedTmdb?.release_date ?? undefined,
-              rating:       selectedTmdb?.rating ?? undefined,
-              genres:       selectedTmdb?.genres ?? undefined,
-              runtime:      selectedTmdb?.runtime ?? undefined,
+              release_date: torrentReleaseDate.trim() || undefined,
+              rating:       torrentRating.trim() ? parseFloat(torrentRating) : undefined,
+              genres:       torrentGenres.trim() ? torrentGenres.split(',').map((g) => g.trim()).filter(Boolean) : undefined,
+              runtime:      torrentRuntime.trim() ? parseInt(torrentRuntime, 10) : undefined,
             },
           }),
         });
@@ -824,6 +833,10 @@ export default function UploadPage() {
       setTorrentSubtitles([]);
       setTorrentPosterFile(null);
       setTorrentPosterPreview(null);
+      setTorrentReleaseDate('');
+      setTorrentRating('');
+      setTorrentGenres('');
+      setTorrentRuntime('');
       setSelectedTmdb(null);
       setTmdbQuality(null);
       setSubmitPhase('done');
@@ -906,10 +919,56 @@ export default function UploadPage() {
     setTorrentDesc(selectedTmdb.overview || '');
     if (selectedTmdb.poster_url) {
       setTorrentPosterPreview(selectedTmdb.poster_url);
-      // We won't set torrentPosterFile since it's a URL, not a File
-      // The submit handler will use the TMDB poster URL directly
     }
     setTorrentQuality(tmdbQuality);
+    setTorrentReleaseDate(selectedTmdb.release_date || '');
+    setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
+    setTorrentGenres(selectedTmdb.genres?.join(', ') || '');
+    setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
+    setTorrentSearchResults([]);
+    setTab('torrent');
+  };
+
+  const handleSearchTorrentSources = async () => {
+    if (!selectedTmdb) return;
+    setTorrentSearching(true);
+    setTorrentSearchError('');
+    setTorrentSearchResults([]);
+    try {
+      const year = selectedTmdb.year;
+      const params = new URLSearchParams({ query: selectedTmdb.title });
+      if (year) params.set('year', String(year));
+      if (tmdbQuality) params.set('quality', tmdbQuality);
+
+      const res = await fetch(`/api/torrent/search?${params}`);
+      if (!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      setTorrentSearchResults(data.results || []);
+      if (!data.results?.length) {
+        setTorrentSearchError('No sources found. Try a different quality or use "I have a torrent" to paste a hash manually.');
+      }
+    } catch (err: any) {
+      setTorrentSearchError(err.message || 'Failed to search');
+    } finally {
+      setTorrentSearching(false);
+    }
+  };
+
+  const handlePickTorrentResult = (result: TorrentSearchResult) => {
+    if (!selectedTmdb) return;
+    // Pre-fill torrent tab with TMDB metadata + selected torrent hash
+    setTorrentTitle(selectedTmdb.title);
+    setTorrentDesc(selectedTmdb.overview || '');
+    if (selectedTmdb.poster_url) {
+      setTorrentPosterPreview(selectedTmdb.poster_url);
+    }
+    setTorrentQuality(tmdbQuality || (result.quality as VideoQuality) || null);
+    setTorrentReleaseDate(selectedTmdb.release_date || '');
+    setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
+    setTorrentGenres(selectedTmdb.genres?.join(', ') || '');
+    setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
+    setHashInput(result.magnet || result.hash);
+    setTorrentSearchResults([]);
     setTab('torrent');
   };
 
@@ -1210,7 +1269,7 @@ export default function UploadPage() {
                   </div>
                 </div>
 
-                {/* Quality selector + Download action */}
+                {/* Quality selector + action buttons */}
                 <div className="border-t border-cinema-border px-5 py-4 space-y-4">
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
@@ -1228,19 +1287,125 @@ export default function UploadPage() {
                     </div>
                   </div>
 
-                  <Button
-                    onClick={handleTmdbConfirmToTorrent}
-                    size="lg"
-                    className="w-full"
-                    icon={<Download className="w-5 h-5" />}
-                  >
-                    Continue to Download
-                  </Button>
+                  {/* Two paths */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button
+                      onClick={handleSearchTorrentSources}
+                      size="lg"
+                      className="w-full"
+                      icon={torrentSearching ? undefined : <Search className="w-4 h-4" />}
+                      loading={torrentSearching}
+                    >
+                      {torrentSearching ? 'Searching...' : 'Search for sources'}
+                    </Button>
+                    <Button
+                      onClick={handleTmdbConfirmToTorrent}
+                      size="lg"
+                      variant="secondary"
+                      className="w-full"
+                      icon={<Hash className="w-4 h-4" />}
+                    >
+                      I have a torrent
+                    </Button>
+                  </div>
 
                   <p className="text-xs text-cinema-text-dim text-center">
-                    Movie details will be pre-filled on the Torrent tab — you&apos;ll provide a hash or pick a source next
+                    Search finds torrents automatically, or paste your own hash on the Torrent tab
                   </p>
                 </div>
+
+                {/* Torrent search error */}
+                {torrentSearchError && !torrentSearching && torrentSearchResults.length === 0 && (
+                  <div className="mx-5 mb-4 flex items-center gap-3 p-3 rounded-xl bg-cinema-warm/10 border border-cinema-warm/20">
+                    <AlertTriangle className="w-4 h-4 text-cinema-warm flex-shrink-0" />
+                    <p className="text-sm text-cinema-warm">{torrentSearchError}</p>
+                  </div>
+                )}
+
+                {/* Torrent search results */}
+                {torrentSearchResults.length > 0 && (
+                  <div className="border-t border-cinema-border">
+                    <div className="px-5 py-3 flex items-center justify-between">
+                      <p className="text-sm font-medium text-cinema-text-muted">
+                        {torrentSearchResults.length} source{torrentSearchResults.length !== 1 ? 's' : ''} found
+                      </p>
+                      <button
+                        onClick={() => setTorrentSearchResults([])}
+                        className="text-xs text-cinema-text-dim hover:text-cinema-text-muted transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="px-5 pb-4 space-y-2 max-h-[400px] overflow-y-auto">
+                      {torrentSearchResults.map((r, i) => (
+                        <div
+                          key={`${r.hash}-${i}`}
+                          className="flex items-start gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border hover:border-cinema-accent/30 transition-all group/result"
+                        >
+                          <div className="flex-1 min-w-0">
+                            {/* Torrent name */}
+                            <p className="text-sm font-medium text-cinema-text truncate leading-snug">{r.name}</p>
+
+                            {/* Badges row */}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {/* Seeders */}
+                              <span className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium',
+                                r.seeders >= 20 ? 'bg-cinema-success/10 text-cinema-success' :
+                                r.seeders >= 5  ? 'bg-cinema-warm/10 text-cinema-warm' :
+                                                   'bg-cinema-error/10 text-cinema-error',
+                              )}>
+                                <Users className="w-3 h-3" />
+                                {r.seeders}
+                              </span>
+
+                              {/* Size */}
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cinema-card text-[11px] text-cinema-text-dim">
+                                <HardDrive className="w-3 h-3" />
+                                {r.size}
+                              </span>
+
+                              {/* Quality */}
+                              {r.quality && (
+                                <span className="px-2 py-0.5 rounded-md bg-cinema-accent/10 text-[11px] text-cinema-accent font-medium">
+                                  {r.quality}
+                                </span>
+                              )}
+
+                              {/* Source type */}
+                              {r.source_type && (
+                                <span className="px-2 py-0.5 rounded-md bg-cinema-secondary/10 text-[11px] text-cinema-secondary font-medium">
+                                  {r.source_type}
+                                </span>
+                              )}
+
+                              {/* Codec */}
+                              {r.codec && (
+                                <span className="px-2 py-0.5 rounded-md bg-cinema-card text-[11px] text-cinema-text-dim">
+                                  {r.codec}
+                                </span>
+                              )}
+
+                              {/* Origin */}
+                              <span className="px-2 py-0.5 rounded-md bg-cinema-card text-[11px] text-cinema-text-dim">
+                                {r.origin}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Select button */}
+                          <button
+                            onClick={() => handlePickTorrentResult(r)}
+                            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-accent/10 text-cinema-accent border border-cinema-accent/20 hover:bg-cinema-accent/20 transition-all mt-0.5"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Select
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1532,6 +1697,74 @@ export default function UploadPage() {
                       <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Movie metadata — optional */}
+              <div className="space-y-4 pt-2 border-t border-cinema-border/50">
+                <p className="text-xs text-cinema-text-dim">Movie details below are optional — they&apos;ll be auto-filled if you use Search Movie first</p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Release Date */}
+                  <div className="space-y-1.5">
+                    <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                      <Calendar className="w-3.5 h-3.5 text-cinema-warm" /> Release Date
+                    </label>
+                    <input
+                      type="date"
+                      value={torrentReleaseDate}
+                      onChange={(e) => setTorrentReleaseDate(e.target.value)}
+                      className="w-full rounded-xl bg-cinema-card border border-cinema-border px-3 py-2.5 text-sm text-cinema-text focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                    />
+                  </div>
+
+                  {/* Rating */}
+                  <div className="space-y-1.5">
+                    <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                      <Star className="w-3.5 h-3.5 text-cinema-accent" /> Rating
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="10"
+                      placeholder="e.g. 8.5"
+                      value={torrentRating}
+                      onChange={(e) => setTorrentRating(e.target.value)}
+                      className="w-full rounded-xl bg-cinema-card border border-cinema-border px-3 py-2.5 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Genres */}
+                  <div className="space-y-1.5">
+                    <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                      <Tag className="w-3.5 h-3.5 text-cinema-secondary" /> Genres
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Drama, Thriller"
+                      value={torrentGenres}
+                      onChange={(e) => setTorrentGenres(e.target.value)}
+                      className="w-full rounded-xl bg-cinema-card border border-cinema-border px-3 py-2.5 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                    />
+                  </div>
+
+                  {/* Runtime */}
+                  <div className="space-y-1.5">
+                    <label className="flex items-center gap-1.5 text-sm font-medium text-cinema-text-muted">
+                      <Clock className="w-3.5 h-3.5 text-cinema-accent" /> Runtime <span className="text-cinema-text-dim text-xs font-normal">(min)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="e.g. 148"
+                      value={torrentRuntime}
+                      onChange={(e) => setTorrentRuntime(e.target.value)}
+                      className="w-full rounded-xl bg-cinema-card border border-cinema-border px-3 py-2.5 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                    />
+                  </div>
                 </div>
               </div>
 

@@ -102,6 +102,21 @@ export interface TMDBMovieDetail extends TMDBSearchResult {
   imdb_id: string | null;
 }
 
+export interface TorrentSearchResult {
+  name: string;
+  hash: string;
+  size: string;
+  size_bytes: number;
+  seeders: number;
+  leechers: number;
+  quality: string | null;
+  source_type: string | null;
+  codec: string | null;
+  origin: string;
+  magnet: string;
+  score: number;
+}
+
 export interface TorrentJob {
   // Identity
   id: string;
