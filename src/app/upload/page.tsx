@@ -387,6 +387,7 @@ export default function UploadPage() {
   const tmdbSearchTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Torrent source search state ─────────────────────────────
+  const [allTorrentResults,    setAllTorrentResults]    = useState<TorrentSearchResult[]>([]); // full unfiltered cache
   const [torrentSearchResults, setTorrentSearchResults] = useState<TorrentSearchResult[]>([]);
   const [torrentSearching,     setTorrentSearching]     = useState(false);
   const [torrentSearchError,   setTorrentSearchError]   = useState('');
@@ -890,6 +891,9 @@ export default function UploadPage() {
 
   const handleTmdbQueryChange = (value: string) => {
     setTmdbQuery(value);
+    // Clear selected movie and torrent results when user starts typing again
+    if (selectedTmdb) setSelectedTmdb(null);
+    if (torrentSearchResults.length > 0) setTorrentSearchResults([]);
     if (tmdbSearchTimer.current) clearTimeout(tmdbSearchTimer.current);
     if (!value.trim()) { setTmdbResults([]); return; }
     tmdbSearchTimer.current = setTimeout(() => handleTmdbSearch(value), 400);
@@ -898,6 +902,11 @@ export default function UploadPage() {
   const handleTmdbSelect = async (tmdbId: number) => {
     setTmdbLoadingDetail(true);
     setTmdbError('');
+    // Clear previous movie's torrent results and quality
+    setAllTorrentResults([]);
+    setTorrentSearchResults([]);
+    setTorrentSearchError('');
+    setTmdbQuality(null);
     try {
       const res = await fetch(`/api/tmdb/search?id=${tmdbId}`);
       if (!res.ok) throw new Error('Failed to load movie details');
@@ -934,18 +943,29 @@ export default function UploadPage() {
     setTorrentSearching(true);
     setTorrentSearchError('');
     setTorrentSearchResults([]);
+    setAllTorrentResults([]);
     try {
       const year = selectedTmdb.year;
       const params = new URLSearchParams({ query: selectedTmdb.title });
       if (year) params.set('year', String(year));
-      if (tmdbQuality) params.set('quality', tmdbQuality);
+      // Don't send quality to API — we fetch ALL results and filter client-side
+      // so switching quality is instant
 
       const res = await fetch(`/api/torrent/search?${params}`);
       if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
-      setTorrentSearchResults(data.results || []);
-      if (!data.results?.length) {
-        setTorrentSearchError('No sources found. Try a different quality or use "I have a torrent" to paste a hash manually.');
+      const all = data.results || [];
+      setAllTorrentResults(all);
+      // Apply quality filter if one is selected
+      if (tmdbQuality) {
+        const filtered = all.filter((r: TorrentSearchResult) => r.quality === tmdbQuality);
+        const others = all.filter((r: TorrentSearchResult) => r.quality !== tmdbQuality);
+        setTorrentSearchResults([...filtered, ...others]);
+      } else {
+        setTorrentSearchResults(all);
+      }
+      if (!all.length) {
+        setTorrentSearchError('No sources found. Try "I have a torrent" to paste a hash manually.');
       }
     } catch (err: any) {
       setTorrentSearchError(err.message || 'Failed to search');
@@ -954,8 +974,33 @@ export default function UploadPage() {
     }
   };
 
+  // Re-filter torrent results when quality changes (instant, no API call)
+  const handleQualityChange = (q: VideoQuality) => {
+    const newQuality = tmdbQuality === q ? null : q;
+    setTmdbQuality(newQuality);
+    if (allTorrentResults.length > 0) {
+      if (newQuality) {
+        const filtered = allTorrentResults.filter(r => r.quality === newQuality);
+        const others = allTorrentResults.filter(r => r.quality !== newQuality);
+        setTorrentSearchResults([...filtered, ...others]);
+      } else {
+        setTorrentSearchResults(allTorrentResults);
+      }
+    }
+  };
+
+  const MAX_MOVIE_SIZE_BYTES = (parseFloat(process.env.NEXT_PUBLIC_MAX_MOVIE_SIZE_GB || '7')) * 1024 * 1024 * 1024;
+
   const handlePickTorrentResult = (result: TorrentSearchResult) => {
     if (!selectedTmdb) return;
+
+    // Check file size limit
+    if (result.size_bytes > 0 && result.size_bytes > MAX_MOVIE_SIZE_BYTES) {
+      const maxGB = (MAX_MOVIE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
+      alert(`This torrent is ${result.size} which exceeds the ${maxGB} GB limit. Please choose a smaller source.`);
+      return;
+    }
+
     // Pre-fill torrent tab with TMDB metadata + selected torrent hash
     setTorrentTitle(selectedTmdb.title);
     setTorrentDesc(selectedTmdb.overview || '');
@@ -969,6 +1014,7 @@ export default function UploadPage() {
     setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
     setHashInput(result.magnet || result.hash);
     setTorrentSearchResults([]);
+    setAllTorrentResults([]);
     setTab('torrent');
   };
 
@@ -1277,7 +1323,7 @@ export default function UploadPage() {
                     </label>
                     <div className="grid grid-cols-4 gap-2">
                       {QUALITY_OPTIONS.map((opt) => (
-                        <button key={opt.value} type="button" onClick={() => setTmdbQuality(tmdbQuality === opt.value ? null : opt.value)}
+                        <button key={opt.value} type="button" onClick={() => handleQualityChange(opt.value)}
                           className={cn('flex flex-col items-center py-2.5 px-3 rounded-xl border text-xs font-medium transition-all duration-200',
                             tmdbQuality === opt.value ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent' : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-text')}>
                           <span className="text-sm font-bold">{opt.label}</span>
@@ -1337,14 +1383,21 @@ export default function UploadPage() {
                       </button>
                     </div>
                     <div className="px-5 pb-4 space-y-2 max-h-[400px] overflow-y-auto">
-                      {torrentSearchResults.map((r, i) => (
+                      {torrentSearchResults.map((r, i) => {
+                        const isOversized = r.size_bytes > 0 && r.size_bytes > MAX_MOVIE_SIZE_BYTES;
+                        return (
                         <div
                           key={`${r.hash}-${i}`}
-                          className="flex items-start gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border hover:border-cinema-accent/30 transition-all group/result"
+                          className={cn(
+                            'flex items-start gap-3 p-3 rounded-xl border transition-all group/result',
+                            isOversized
+                              ? 'bg-cinema-surface/50 border-cinema-border/50 opacity-60'
+                              : 'bg-cinema-surface border-cinema-border hover:border-cinema-accent/30',
+                          )}
                         >
                           <div className="flex-1 min-w-0">
                             {/* Torrent name */}
-                            <p className="text-sm font-medium text-cinema-text truncate leading-snug">{r.name}</p>
+                            <p className={cn('text-sm font-medium truncate leading-snug', isOversized ? 'text-cinema-text-dim' : 'text-cinema-text')}>{r.name}</p>
 
                             {/* Badges row */}
                             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
@@ -1359,10 +1412,14 @@ export default function UploadPage() {
                                 {r.seeders}
                               </span>
 
-                              {/* Size */}
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cinema-card text-[11px] text-cinema-text-dim">
+                              {/* Size — red if oversized */}
+                              <span className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px]',
+                                isOversized ? 'bg-cinema-error/10 text-cinema-error font-medium' : 'bg-cinema-card text-cinema-text-dim',
+                              )}>
                                 <HardDrive className="w-3 h-3" />
                                 {r.size}
+                                {isOversized && <span className="ml-0.5">· Too large</span>}
                               </span>
 
                               {/* Quality */}
@@ -1393,16 +1450,23 @@ export default function UploadPage() {
                             </div>
                           </div>
 
-                          {/* Select button */}
-                          <button
-                            onClick={() => handlePickTorrentResult(r)}
-                            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-accent/10 text-cinema-accent border border-cinema-accent/20 hover:bg-cinema-accent/20 transition-all mt-0.5"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            Select
-                          </button>
+                          {/* Select button — disabled if oversized */}
+                          {isOversized ? (
+                            <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-error/5 text-cinema-error/50 border border-cinema-error/10 mt-0.5 cursor-not-allowed">
+                              Exceeds limit
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handlePickTorrentResult(r)}
+                              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-accent/10 text-cinema-accent border border-cinema-accent/20 hover:bg-cinema-accent/20 transition-all mt-0.5"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              Select
+                            </button>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}

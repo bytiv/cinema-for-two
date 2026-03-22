@@ -97,6 +97,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Size gate: resolve torrent size BEFORE spinning up any container ──
+    const MAX_SIZE_GB = parseFloat(process.env.NEXT_PUBLIC_MAX_MOVIE_SIZE_GB || '7');
+    const MAX_SIZE_BYTES = MAX_SIZE_GB * 1024 * 1024 * 1024;
+
+    // Extract info hash from magnet URI or raw hash
+    let infoHash = hash.trim();
+    const magnetMatch = infoHash.match(/btih:([a-fA-F0-9]{40})/i);
+    if (magnetMatch) infoHash = magnetMatch[1];
+    // Also handle base32 magnet hashes (rare but possible)
+    const magnetMatch32 = hash.match(/btih:([A-Za-z2-7]{32})/);
+    if (!magnetMatch && magnetMatch32) infoHash = magnetMatch32[1];
+    infoHash = infoHash.toUpperCase();
+
+    // Try to get torrent size from TPB API (fast, no scraping)
+    let torrentSize: number | null = null;
+    const tpbApis = ['https://apibay.org', 'https://piratebay.live'];
+    for (const api of tpbApis) {
+      try {
+        const res = await fetch(`${api}/q.php?q=${infoHash}`, {
+          signal: AbortSignal.timeout(8000),
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
+        if (!res.ok) continue;
+        const text = await res.text();
+        if (!text.startsWith('[')) continue;
+        const data = JSON.parse(text);
+        if (!Array.isArray(data) || data.length === 0) continue;
+        if (data.length === 1 && data[0].id === '0') continue;
+        // Find the exact hash match
+        const match = data.find((t: any) =>
+          (t.info_hash || '').toUpperCase() === infoHash
+        );
+        if (match && match.size) {
+          torrentSize = parseInt(match.size) || null;
+          break;
+        }
+        // If searching by hash returned results but no exact match, use first result
+        if (data[0]?.size) {
+          torrentSize = parseInt(data[0].size) || null;
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (torrentSize && torrentSize > MAX_SIZE_BYTES) {
+      const sizeGB = (torrentSize / 1024 / 1024 / 1024).toFixed(2);
+      return NextResponse.json(
+        { error: `Torrent size is ${sizeGB} GB which exceeds the ${MAX_SIZE_GB} GB limit. Please choose a smaller source.` },
+        { status: 413 },
+      );
+    }
+
+    console.log(`[ingest/submit] Size check: ${torrentSize ? (torrentSize / 1024 / 1024 / 1024).toFixed(2) + ' GB' : 'unknown (allowing)'} for hash ${infoHash.slice(0, 8)}...`);
+
     // 1b. Check torrent upload permission
     const { data: profile } = await supabaseAdmin
       .from('profiles')
