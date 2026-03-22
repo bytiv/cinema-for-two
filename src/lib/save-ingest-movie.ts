@@ -102,6 +102,19 @@ export async function saveIngestMovie(
   // ── Probe blob ────────────────────────────────────────────────────────────
   const { fileSize, duration } = await probeBlobMeta(blobName);
 
+  // ── Guard against duplicate inserts ────────────────────────────────────────
+  // Multiple SSE connections or page refreshes can race to save the same movie.
+  // Check if a movie already exists for this ingest job before inserting.
+  const { data: existing } = await supabase
+    .from('movies')
+    .select('id, blob_url')
+    .eq('ingest_job_id', job.job_id)
+    .maybeSingle();
+
+  if (existing) {
+    return { movieId: existing.id, blobUrl: existing.blob_url };
+  }
+
   // ── Insert movie row ──────────────────────────────────────────────────────
   const { data: movie, error: movieError } = await supabase
     .from('movies')
@@ -131,6 +144,18 @@ export async function saveIngestMovie(
     .single();
 
   if (movieError || !movie) {
+    // If insert failed due to a race condition (another request inserted first),
+    // try to find the existing movie instead of throwing
+    const { data: raceWinner } = await supabase
+      .from('movies')
+      .select('id, blob_url')
+      .eq('ingest_job_id', job.job_id)
+      .maybeSingle();
+
+    if (raceWinner) {
+      return { movieId: raceWinner.id, blobUrl: raceWinner.blob_url };
+    }
+
     throw new Error(`Failed to insert movie: ${movieError?.message}`);
   }
 

@@ -74,6 +74,17 @@ export async function POST(req: NextRequest) {
       if (!isNaN(cl)) fileSize = cl;
     } catch {}
 
+    // Guard against duplicate inserts — check if movie already exists for this job
+    const { data: existingMovie } = await supabaseAdmin
+      .from('movies')
+      .select('id')
+      .eq('ingest_job_id', job_id)
+      .maybeSingle();
+
+    if (existingMovie) {
+      return NextResponse.json({ movie_id: existingMovie.id });
+    }
+
     // Insert movie row
     const { data: movie, error: movieError } = await supabaseAdmin
       .from('movies')
@@ -103,6 +114,17 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (movieError || !movie) {
+      // Race condition: another request may have inserted first
+      const { data: raceWinner } = await supabaseAdmin
+        .from('movies')
+        .select('id')
+        .eq('ingest_job_id', job_id)
+        .maybeSingle();
+
+      if (raceWinner) {
+        return NextResponse.json({ movie_id: raceWinner.id });
+      }
+
       return NextResponse.json(
         { error: `Failed to create movie: ${movieError?.message}` },
         { status: 500 },
