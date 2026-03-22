@@ -189,7 +189,7 @@ async function search1337x(query: string): Promise<TorrentResult[]> {
       if (!html.includes('coll-1')) continue; // not a valid results page
 
       // Parse search results page
-      const rowRegex = /<td class="coll-1 name">.*?<a href="(\/torrent\/[^"]+)"[^>]*>([^<]+)<\/a>.*?<td class="coll-2[^"]*">([^<]+)<\/td>.*?<td class="coll-4[^"]*">(\d+)<\/td>.*?<td class="coll-5[^"]*">(\d+)<\/td>/gs;
+      const rowRegex = /<td class="coll-1 name">[\s\S]*?<a href="(\/torrent\/[^"]+)"[^>]*>([^<]+)<\/a>[\s\S]*?<td class="coll-2[^"]*">([^<]+)<\/td>[\s\S]*?<td class="coll-4[^"]*">(\d+)<\/td>[\s\S]*?<td class="coll-5[^"]*">(\d+)<\/td>/g;
 
       const detailLinks: { url: string; name: string; size: string; seeders: number; leechers: number }[] = [];
       let match;
