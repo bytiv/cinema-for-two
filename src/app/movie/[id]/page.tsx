@@ -9,7 +9,7 @@ import Button from '@/components/ui/Button';
 import Image from 'next/image';
 import AzurePosterImage from '@/components/movie/AzurePosterImage';
 import Link from 'next/link';
-import { Play, Users, Clock, HardDrive, Calendar, Trash2, ArrowLeft, History, RefreshCw, Pencil, X, Gauge, Globe, Plus, Save, AlertCircle, Image as ImageIcon, Upload } from 'lucide-react';
+import { Play, Users, Clock, HardDrive, Calendar, Trash2, ArrowLeft, History, RefreshCw, Pencil, X, Gauge, Globe, Plus, Save, AlertCircle, Image as ImageIcon, Upload, Star, Tag } from 'lucide-react';
 import { formatDuration, formatFileSize, formatRelativeTime } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '@/lib/utils';
@@ -603,24 +603,24 @@ export default function MovieDetailPage() {
       <Navbar />
 
       {movie.poster_url && (
-        <div className="fixed inset-0 z-0 opacity-20">
-          <AzurePosterImage posterUrl={movie.poster_url} alt="" fill className="object-cover blur-3xl" />
-          <div className="absolute inset-0 bg-cinema-bg/80" />
+        <div className="fixed inset-0 z-0 opacity-15">
+          <AzurePosterImage posterUrl={movie.poster_url} alt="" fill className="object-cover blur-3xl scale-110" />
+          <div className="absolute inset-0 bg-gradient-to-b from-cinema-bg/60 via-cinema-bg/90 to-cinema-bg" />
         </div>
       )}
 
       <main className="relative z-10 pt-24 pb-12 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto">
-        <Link href="/browse" className="inline-flex items-center gap-2 text-cinema-text-muted hover:text-cinema-text mb-6 transition-colors">
-          <ArrowLeft className="w-4 h-4" />
+        <Link href="/browse" className="inline-flex items-center gap-2 text-cinema-text-muted hover:text-cinema-text mb-6 transition-colors group">
+          <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
           Back to Browse
         </Link>
 
-        <div className="flex flex-col md:flex-row gap-8">
+        <div className="flex flex-col md:flex-row gap-8 md:gap-12">
           {/* Poster */}
-          <div className="w-full md:w-72 flex-shrink-0">
-            <div className="relative aspect-[2/3] rounded-2xl overflow-hidden bg-cinema-card glow-border">
+          <div className="w-full md:w-[340px] flex-shrink-0">
+            <div className="relative aspect-[2/3] rounded-2xl overflow-hidden bg-cinema-card glow-border shadow-xl shadow-black/30">
               {movie.poster_url ? (
-                <AzurePosterImage posterUrl={movie.poster_url} alt={movie.title} fill className="object-cover" sizes="300px"
+                <AzurePosterImage posterUrl={movie.poster_url} alt={movie.title} fill className="object-cover" sizes="340px"
                   fallback={<div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-cinema-accent/10 to-cinema-secondary/10"><span className="text-6xl">🎬</span></div>}
                 />
               ) : (
@@ -630,10 +630,33 @@ export default function MovieDetailPage() {
           </div>
 
           {/* Info */}
-          <div className="flex-1 space-y-6">
+          <div className="flex-1 space-y-5">
+            {/* Title + Edit */}
             <div>
               <div className="flex items-start justify-between gap-4">
-                <h1 className="font-display text-3xl sm:text-4xl font-bold text-cinema-text mb-3">{movie.title}</h1>
+                <div>
+                  <h1 className="font-display text-3xl sm:text-4xl font-bold text-cinema-text mb-2">{movie.title}</h1>
+                  {/* Inline year + runtime + genres — more prominent */}
+                  <div className="flex flex-wrap items-center gap-2 text-[15px] text-cinema-text-muted font-medium mt-1">
+                    {movie.release_date && <span>{new Date(movie.release_date).getFullYear()}</span>}
+                    {movie.release_date && (movie.runtime || movie.duration) && <span className="text-cinema-text-dim">·</span>}
+                    {(movie.runtime || movie.duration) && (
+                      <span>
+                        {movie.runtime
+                          ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m`
+                          : movie.duration
+                          ? formatDuration(movie.duration)
+                          : ''}
+                      </span>
+                    )}
+                    {Array.isArray(movie.genres) && movie.genres.length > 0 && (
+                      <>
+                        <span className="text-cinema-text-dim">·</span>
+                        <span>{movie.genres.join(', ')}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
                 {canEdit && (
                   <button
                     onClick={() => setShowEditModal(true)}
@@ -644,52 +667,45 @@ export default function MovieDetailPage() {
                   </button>
                 )}
               </div>
-              {movie.description && <p className="text-cinema-text-muted leading-relaxed">{movie.description}</p>}
+              {movie.description && <p className="text-cinema-text-muted leading-relaxed mt-3">{movie.description}</p>}
             </div>
 
-            {/* Meta */}
-            <div className="flex flex-wrap gap-4">
-              {movie.duration && (
-                <div className="flex items-center gap-2 text-sm text-cinema-text-muted">
-                  <Clock className="w-4 h-4 text-cinema-accent" />
-                  {formatDuration(movie.duration)}
+            {/* Meta badges — only actual metadata, hover reactive */}
+            <div className="flex flex-wrap gap-2">
+              {movie.rating != null && movie.rating > 0 && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-accent transition-all duration-200 cursor-default">
+                  <Star className="w-3.5 h-3.5 text-cinema-accent" fill="currentColor" />
+                  <span className="font-semibold">{movie.rating.toFixed(1)}</span>
                 </div>
               )}
               {movie.quality && (
-                <div className="flex items-center gap-2 text-sm text-cinema-text-muted">
-                  <Gauge className="w-4 h-4 text-cinema-accent" />
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-accent transition-all duration-200 cursor-default">
+                  <Gauge className="w-3.5 h-3.5" />
                   {movie.quality}
                 </div>
               )}
-              <div className="flex items-center gap-2 text-sm text-cinema-text-muted">
-                <HardDrive className="w-4 h-4 text-cinema-secondary" />
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default">
+                <HardDrive className="w-3.5 h-3.5" />
                 {formatFileSize(movie.file_size)}
               </div>
-              <div className="flex items-center gap-2 text-sm text-cinema-text-muted">
-                <Calendar className="w-4 h-4 text-cinema-warm" />
-                {formatRelativeTime(movie.created_at)}
-              </div>
               {movie.subtitles && movie.subtitles.length > 0 && (
-                <div className="flex items-center gap-2 text-sm text-cinema-text-muted">
-                  <Globe className="w-4 h-4 text-cinema-secondary" />
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default">
+                  <Globe className="w-3.5 h-3.5" />
                   {movie.subtitles.map((s) => s.label).join(', ')}
                 </div>
               )}
             </div>
 
-            {/* Uploader */}
-            {movie.uploader && (
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-cinema-card/50 border border-cinema-border w-fit">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cinema-accent to-cinema-secondary flex items-center justify-center overflow-hidden">
-                  {movie.uploader.avatar_url ? (
-                    <Image src={movie.uploader.avatar_url} alt="" width={32} height={32} className="object-cover" />
-                  ) : (
-                    <span className="text-xs font-bold text-cinema-bg">{movie.uploader.first_name.charAt(0)}</span>
-                  )}
-                </div>
-                <p className="text-sm text-cinema-text">Uploaded by {movie.uploader.first_name} {movie.uploader.last_name}</p>
-              </div>
-            )}
+            {/* Uploader + Added date — plain text */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-cinema-text-dim">
+              {movie.uploader && (
+                <span>Uploaded by <span className="text-cinema-text-muted">{movie.uploader.first_name} {movie.uploader.last_name}</span></span>
+              )}
+              <span className="flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5" />
+                Added {formatRelativeTime(movie.created_at)}
+              </span>
+            </div>
 
             {/* Actions */}
             <div className="flex flex-wrap gap-3">
