@@ -14,8 +14,9 @@ import {
   Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle,
   Plus, Globe, Gauge, Clock, Hash, Magnet, Download, HardDrive,
   Users, Zap, Ban, Loader2, ArrowRight, AlertTriangle, FolderOpen,
-  Server, Wifi, WifiOff,
+  Server, Wifi, WifiOff, Search, Star, Calendar, Tag,
 } from 'lucide-react';
+import type { TMDBSearchResult, TMDBMovieDetail } from '@/types';
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -48,7 +49,7 @@ const QUALITY_OPTIONS: { value: VideoQuality; label: string; desc: string }[] = 
   { value: '4K',    label: '4K',    desc: 'Ultra HD' },
 ];
 
-type Tab = 'direct' | 'torrent' | 'jobs';
+type Tab = 'direct' | 'torrent' | 'search' | 'jobs';
 
 // ─────────────────────────────────────────────────────────────
 // Submit phase — shown instead of the spinner label
@@ -339,7 +340,7 @@ export default function UploadPage() {
   const supabase = createClient();
 
   // ── Tab state ──────────────────────────────────────────────
-  const [tab, setTab] = useState<Tab>('direct');
+  const [tab, setTab] = useState<Tab>('search');
 
   // ── Permission state ────────────────────────────────────────
   const [canTorrent, setCanTorrent] = useState(false);
@@ -370,6 +371,16 @@ export default function UploadPage() {
   const [torrentPosterPreview, setTorrentPosterPreview] = useState<string | null>(null);
   const [torrentError,         setTorrentError]         = useState('');
   const [submitPhase,          setSubmitPhase]          = useState<SubmitPhase>('idle');
+
+  // ── TMDB search state ───────────────────────────────────────
+  const [tmdbQuery,         setTmdbQuery]         = useState('');
+  const [tmdbResults,       setTmdbResults]       = useState<TMDBSearchResult[]>([]);
+  const [tmdbSearching,     setTmdbSearching]     = useState(false);
+  const [tmdbError,         setTmdbError]         = useState('');
+  const [selectedTmdb,      setSelectedTmdb]      = useState<TMDBMovieDetail | null>(null);
+  const [tmdbLoadingDetail, setTmdbLoadingDetail] = useState(false);
+  const [tmdbQuality,       setTmdbQuality]       = useState<VideoQuality | null>(null);
+  const tmdbSearchTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Active jobs state ──────────────────────────────────────
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
@@ -713,6 +724,9 @@ export default function UploadPage() {
           body: torrentPosterFile,
         });
         posterUrl = pReadUrl;
+      } else if (torrentPosterPreview && torrentPosterPreview.startsWith('https://image.tmdb.org')) {
+        // TMDB poster URL from search flow — use directly
+        posterUrl = torrentPosterPreview;
       }
 
       // ── 2. Upload subtitles ─────────────────────────────────
@@ -754,6 +768,12 @@ export default function UploadPage() {
               quality:     torrentQuality ?? undefined,
               posterUrl,
               subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
+              // TMDB metadata (from search flow)
+              tmdb_id:      selectedTmdb?.tmdb_id ?? undefined,
+              release_date: selectedTmdb?.release_date ?? undefined,
+              rating:       selectedTmdb?.rating ?? undefined,
+              genres:       selectedTmdb?.genres ?? undefined,
+              runtime:      selectedTmdb?.runtime ?? undefined,
             },
           }),
         });
@@ -804,6 +824,8 @@ export default function UploadPage() {
       setTorrentSubtitles([]);
       setTorrentPosterFile(null);
       setTorrentPosterPreview(null);
+      setSelectedTmdb(null);
+      setTmdbQuality(null);
       setSubmitPhase('done');
       setTab('jobs');
 
@@ -832,6 +854,63 @@ export default function UploadPage() {
         ),
       );
     } catch {}
+  };
+
+  // ─────────────────────────────────────────────────────────
+  // TMDB search helpers
+  // ─────────────────────────────────────────────────────────
+  const handleTmdbSearch = useCallback(async (q: string) => {
+    if (!q.trim()) { setTmdbResults([]); return; }
+    setTmdbSearching(true);
+    setTmdbError('');
+    try {
+      const res = await fetch(`/api/tmdb/search?query=${encodeURIComponent(q.trim())}`);
+      if (!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      setTmdbResults(data.results || []);
+    } catch (err: any) {
+      setTmdbError(err.message || 'Search failed');
+    } finally {
+      setTmdbSearching(false);
+    }
+  }, []);
+
+  const handleTmdbQueryChange = (value: string) => {
+    setTmdbQuery(value);
+    if (tmdbSearchTimer.current) clearTimeout(tmdbSearchTimer.current);
+    if (!value.trim()) { setTmdbResults([]); return; }
+    tmdbSearchTimer.current = setTimeout(() => handleTmdbSearch(value), 400);
+  };
+
+  const handleTmdbSelect = async (tmdbId: number) => {
+    setTmdbLoadingDetail(true);
+    setTmdbError('');
+    try {
+      const res = await fetch(`/api/tmdb/search?id=${tmdbId}`);
+      if (!res.ok) throw new Error('Failed to load movie details');
+      const data = await res.json();
+      setSelectedTmdb(data.movie);
+      setTmdbResults([]);
+      setTmdbQuery('');
+    } catch (err: any) {
+      setTmdbError(err.message || 'Failed to load details');
+    } finally {
+      setTmdbLoadingDetail(false);
+    }
+  };
+
+  const handleTmdbConfirmToTorrent = () => {
+    if (!selectedTmdb) return;
+    // Pre-fill the torrent tab with TMDB metadata
+    setTorrentTitle(selectedTmdb.title);
+    setTorrentDesc(selectedTmdb.overview || '');
+    if (selectedTmdb.poster_url) {
+      setTorrentPosterPreview(selectedTmdb.poster_url);
+      // We won't set torrentPosterFile since it's a URL, not a File
+      // The submit handler will use the TMDB poster URL directly
+    }
+    setTorrentQuality(tmdbQuality);
+    setTab('torrent');
   };
 
   // ─────────────────────────────────────────────────────────
@@ -990,12 +1069,13 @@ export default function UploadPage() {
           <h1 className="font-display text-3xl font-bold text-cinema-text mb-2">
             Add a Movie <span className="text-cinema-accent">🎞️</span>
           </h1>
-          <p className="text-cinema-text-muted">Upload a file directly or fetch one by torrent hash</p>
+          <p className="text-cinema-text-muted">Search a movie, upload a file, or fetch by torrent hash</p>
         </div>
 
         {/* Tab switcher */}
         <div className="flex items-center gap-1 p-1 rounded-2xl bg-cinema-card/60 border border-cinema-border backdrop-blur-sm mb-6">
           {([
+            { id: 'search',  icon: <Search className="w-4 h-4" />,     label: 'Search Movie'   },
             { id: 'direct',  icon: <Upload className="w-4 h-4" />,     label: 'Upload File'    },
             { id: 'torrent', icon: <Magnet className="w-4 h-4" />,     label: 'Torrent / Hash' },
             { id: 'jobs',    icon: <FolderOpen className="w-4 h-4" />, label: 'Active Jobs', badge: activeCount },
@@ -1023,6 +1103,216 @@ export default function UploadPage() {
             </button>
           ))}
         </div>
+
+        {/* ── TAB: Search Movie (TMDB) ────────────────────────── */}
+        {tab === 'search' && (
+          <div className="space-y-6 animate-fade-in">
+
+            {/* Search bar */}
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-cinema-text-dim" />
+              <input
+                type="text"
+                placeholder="Search for a movie..."
+                value={tmdbQuery}
+                onChange={(e) => handleTmdbQueryChange(e.target.value)}
+                autoFocus
+                className="w-full pl-12 pr-4 py-4 rounded-2xl bg-cinema-card/50 border border-cinema-border text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all text-lg"
+              />
+              {tmdbSearching && (
+                <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-cinema-accent animate-spin" />
+              )}
+            </div>
+
+            {tmdbError && (
+              <div className="flex items-center gap-3 p-4 rounded-xl bg-cinema-error/10 border border-cinema-error/20">
+                <AlertCircle className="w-5 h-5 text-cinema-error flex-shrink-0" />
+                <p className="text-sm text-cinema-error">{tmdbError}</p>
+              </div>
+            )}
+
+            {/* Selected movie detail card */}
+            {selectedTmdb && (
+              <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-accent/30 rounded-2xl overflow-hidden animate-fade-in">
+                <div className="flex gap-5 p-5">
+                  {/* Poster */}
+                  {selectedTmdb.poster_url ? (
+                    <img
+                      src={selectedTmdb.poster_url}
+                      alt={selectedTmdb.title}
+                      className="w-32 h-48 rounded-xl object-cover flex-shrink-0 shadow-lg"
+                    />
+                  ) : (
+                    <div className="w-32 h-48 rounded-xl bg-cinema-surface flex items-center justify-center flex-shrink-0">
+                      <Film className="w-10 h-10 text-cinema-text-dim" />
+                    </div>
+                  )}
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-display text-xl font-bold text-cinema-text leading-tight">
+                        {selectedTmdb.title}
+                      </h3>
+                      <button
+                        onClick={() => setSelectedTmdb(null)}
+                        className="text-cinema-text-dim hover:text-cinema-error transition-colors flex-shrink-0"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    {selectedTmdb.tagline && (
+                      <p className="text-sm text-cinema-accent italic mt-1">{selectedTmdb.tagline}</p>
+                    )}
+
+                    {/* Metadata chips */}
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                      {selectedTmdb.year && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-surface text-xs text-cinema-text-muted">
+                          <Calendar className="w-3 h-3" /> {selectedTmdb.year}
+                        </span>
+                      )}
+                      {selectedTmdb.runtime && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-surface text-xs text-cinema-text-muted">
+                          <Clock className="w-3 h-3" /> {Math.floor(selectedTmdb.runtime / 60)}h {selectedTmdb.runtime % 60}m
+                        </span>
+                      )}
+                      {selectedTmdb.rating > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-yellow-500/10 text-xs text-yellow-400 font-medium">
+                          <Star className="w-3 h-3" fill="currentColor" /> {selectedTmdb.rating.toFixed(1)}
+                        </span>
+                      )}
+                      {selectedTmdb.language && (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-surface text-xs text-cinema-text-muted uppercase">
+                          {selectedTmdb.language}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Genres */}
+                    {selectedTmdb.genres?.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {selectedTmdb.genres.map((g) => (
+                          <span key={g} className="px-2 py-0.5 rounded-md bg-cinema-accent/10 text-[11px] text-cinema-accent font-medium">
+                            {g}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Overview */}
+                    {selectedTmdb.overview && (
+                      <p className="text-sm text-cinema-text-muted mt-3 line-clamp-3 leading-relaxed">
+                        {selectedTmdb.overview}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Quality selector + Download action */}
+                <div className="border-t border-cinema-border px-5 py-4 space-y-4">
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                      <Gauge className="w-4 h-4 text-cinema-accent" /> Preferred Quality
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {QUALITY_OPTIONS.map((opt) => (
+                        <button key={opt.value} type="button" onClick={() => setTmdbQuality(tmdbQuality === opt.value ? null : opt.value)}
+                          className={cn('flex flex-col items-center py-2.5 px-3 rounded-xl border text-xs font-medium transition-all duration-200',
+                            tmdbQuality === opt.value ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent' : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-text')}>
+                          <span className="text-sm font-bold">{opt.label}</span>
+                          <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <Button
+                    onClick={handleTmdbConfirmToTorrent}
+                    size="lg"
+                    className="w-full"
+                    icon={<Download className="w-5 h-5" />}
+                  >
+                    Continue to Download
+                  </Button>
+
+                  <p className="text-xs text-cinema-text-dim text-center">
+                    Movie details will be pre-filled on the Torrent tab — you&apos;ll provide a hash or pick a source next
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Loading detail */}
+            {tmdbLoadingDetail && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 text-cinema-accent animate-spin" />
+              </div>
+            )}
+
+            {/* Search results grid */}
+            {!selectedTmdb && tmdbResults.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                {tmdbResults.map((m) => (
+                  <button
+                    key={m.tmdb_id}
+                    onClick={() => handleTmdbSelect(m.tmdb_id)}
+                    className="group text-left rounded-xl overflow-hidden bg-cinema-card/50 border border-cinema-border hover:border-cinema-accent/50 transition-all duration-300 hover:shadow-[0_4px_20px_rgba(232,160,191,0.15)] hover:-translate-y-1"
+                  >
+                    {/* Poster */}
+                    <div className="relative aspect-[2/3] bg-cinema-surface">
+                      {m.poster_url ? (
+                        <img src={m.poster_url} alt={m.title} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Film className="w-10 h-10 text-cinema-text-dim opacity-30" />
+                        </div>
+                      )}
+                      {/* Rating badge */}
+                      {m.rating > 0 && (
+                        <div className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/70 backdrop-blur-sm">
+                          <Star className="w-3 h-3 text-yellow-400" fill="currentColor" />
+                          <span className="text-[11px] font-bold text-white">{m.rating.toFixed(1)}</span>
+                        </div>
+                      )}
+                      {/* Gradient */}
+                      <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent" />
+                    </div>
+                    {/* Info */}
+                    <div className="p-3">
+                      <h4 className="text-sm font-semibold text-cinema-text line-clamp-1">{m.title}</h4>
+                      <div className="flex items-center gap-1.5 mt-1 text-[11px] text-cinema-text-dim">
+                        {m.year && <span>{m.year}</span>}
+                        {m.year && m.genres.length > 0 && <span className="text-cinema-text-dim/40">·</span>}
+                        {m.genres.length > 0 && <span className="truncate">{m.genres.slice(0, 2).join(', ')}</span>}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!selectedTmdb && !tmdbSearching && tmdbResults.length === 0 && tmdbQuery.trim().length === 0 && (
+              <div className="text-center py-16">
+                <div className="w-16 h-16 rounded-2xl bg-cinema-card border border-cinema-border flex items-center justify-center mx-auto mb-4">
+                  <Search className="w-8 h-8 text-cinema-text-dim opacity-40" />
+                </div>
+                <p className="text-cinema-text-muted font-medium">Search for any movie</p>
+                <p className="text-sm text-cinema-text-dim mt-1">We&apos;ll fetch details from TMDB — title, poster, rating, genres, runtime</p>
+              </div>
+            )}
+
+            {/* No results */}
+            {!selectedTmdb && !tmdbSearching && tmdbResults.length === 0 && tmdbQuery.trim().length > 0 && (
+              <div className="text-center py-12">
+                <p className="text-cinema-text-muted">No movies found for &ldquo;{tmdbQuery}&rdquo;</p>
+                <p className="text-sm text-cinema-text-dim mt-1">Try a different title or spelling</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── TAB: Direct Upload ─────────────────────────────── */}
         {tab === 'direct' && (

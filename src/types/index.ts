@@ -62,6 +62,12 @@ export interface Movie {
   format: string;
   quality: VideoQuality | null;
   subtitles: SubtitleTrack[];
+  // TMDB metadata
+  tmdb_id: number | null;
+  release_date: string | null;
+  rating: number | null;
+  genres: string[] | null;
+  runtime: number | null;         // minutes (from TMDB)
   // Ingest provenance
   ingest_method: IngestMethod;
   info_hash: string | null;       // null for direct uploads
@@ -72,6 +78,28 @@ export interface Movie {
   updated_at: string;
   // Joined
   uploader?: Profile;
+}
+
+export interface TMDBSearchResult {
+  tmdb_id: number;
+  title: string;
+  original_title: string;
+  overview: string;
+  poster_url: string | null;
+  poster_path: string | null;
+  release_date: string;
+  year: number | null;
+  rating: number;
+  vote_count: number;
+  genres: string[];
+  language: string;
+}
+
+export interface TMDBMovieDetail extends TMDBSearchResult {
+  backdrop_url: string | null;
+  runtime: number | null;
+  tagline: string;
+  imdb_id: string | null;
 }
 
 export interface TorrentJob {

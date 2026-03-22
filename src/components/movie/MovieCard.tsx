@@ -2,7 +2,7 @@
 
 import { Movie } from '@/types';
 import { formatDuration } from '@/lib/utils';
-import { Play, Clock } from 'lucide-react';
+import { Play, Clock, Star } from 'lucide-react';
 import Link from 'next/link';
 import AzurePosterImage from './AzurePosterImage';
 
@@ -11,6 +11,20 @@ interface MovieCardProps {
 }
 
 export default function MovieCard({ movie }: MovieCardProps) {
+  if (!movie) return null;
+
+  const year = movie.release_date
+    ? new Date(movie.release_date).getFullYear()
+    : null;
+
+  const displayDuration = movie.runtime
+    ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m`
+    : movie.duration
+    ? formatDuration(movie.duration)
+    : null;
+
+  const firstGenre = Array.isArray(movie.genres) && movie.genres.length ? movie.genres[0] : null;
+
   return (
     <Link href={`/movie/${movie.id}`} className="group block">
       <div className="relative aspect-[2/3] rounded-xl overflow-hidden bg-cinema-card border border-cinema-border hover:border-cinema-accent/50 transition-all duration-500 hover:shadow-[0_8px_40px_rgba(232,160,191,0.2)] hover:-translate-y-1.5 cursor-pointer">
@@ -35,18 +49,44 @@ export default function MovieCard({ movie }: MovieCardProps) {
           </div>
         )}
 
-        {/* Gradient scrim — taller and darker for legibility */}
-        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black via-black/60 to-transparent pointer-events-none" />
+        {/* Rating badge — top right */}
+        {movie.rating != null && movie.rating > 0 && (
+          <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-lg bg-black/70 backdrop-blur-sm pointer-events-none">
+            <Star className="w-3 h-3 text-yellow-400" fill="currentColor" />
+            <span className="text-xs font-bold text-white">{movie.rating.toFixed(1)}</span>
+          </div>
+        )}
 
-        {/* Title + duration */}
+        {/* Quality badge — top left */}
+        {movie.quality && (
+          <div className="absolute top-2 left-2 px-2 py-1 rounded-lg bg-cinema-accent/80 backdrop-blur-sm pointer-events-none">
+            <span className="text-[10px] font-bold text-white">{movie.quality}</span>
+          </div>
+        )}
+
+        {/* Gradient scrim */}
+        <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/60 to-transparent pointer-events-none" />
+
+        {/* Title + metadata */}
         <div className="absolute inset-x-0 bottom-0 p-3 pointer-events-none">
           <h3 className="font-display text-sm font-semibold text-white leading-snug line-clamp-2 drop-shadow-md">
             {movie.title}
           </h3>
-          {movie.duration && (
-            <div className="flex items-center gap-1 mt-1 text-white/55 text-xs">
+
+          {/* Year + Genre row */}
+          {(year || firstGenre) && (
+            <div className="flex items-center gap-1.5 mt-1 text-white/60 text-[11px]">
+              {year && <span>{year}</span>}
+              {year && firstGenre && <span className="text-white/30">·</span>}
+              {firstGenre && <span>{firstGenre}</span>}
+            </div>
+          )}
+
+          {/* Duration row */}
+          {displayDuration && (
+            <div className="flex items-center gap-1 mt-0.5 text-white/50 text-xs">
               <Clock className="w-3 h-3 flex-shrink-0" />
-              {formatDuration(movie.duration)}
+              {displayDuration}
             </div>
           )}
         </div>

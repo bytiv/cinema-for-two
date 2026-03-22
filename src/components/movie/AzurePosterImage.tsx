@@ -18,6 +18,9 @@ interface AzurePosterImageProps {
 const sasCache: Record<string, { url: string; expiresAt: number }> = {};
 
 async function resolvePosterUrl(posterUrl: string): Promise<string> {
+  // External URLs (TMDB, etc.) — use directly, no SAS needed
+  if (!posterUrl.includes('blob.core.windows.net')) return posterUrl;
+
   // If it's already a proper SAS URL (has sig= param), use it directly
   if (posterUrl.includes('sig=')) return posterUrl;
 
