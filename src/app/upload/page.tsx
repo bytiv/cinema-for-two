@@ -57,6 +57,7 @@ type Tab = 'direct' | 'torrent' | 'search' | 'jobs';
 
 type SubmitPhase =
   | 'idle'
+  | 'checking-size'      // checking torrent size before anything else
   | 'uploading-poster'   // uploading poster to Azure
   | 'uploading-subs'     // uploading subtitles to Azure
   | 'service-check'      // checking if container is alive
@@ -67,6 +68,7 @@ type SubmitPhase =
 
 const PHASE_LABELS: Record<SubmitPhase, string> = {
   idle:                '',
+  'checking-size':     'Checking torrent size...',
   'uploading-poster':  'Uploading poster...',
   'uploading-subs':    'Uploading subtitles...',
   'service-check':     'Checking service status...',
@@ -132,27 +134,36 @@ function SubmitPhaseBanner({ phase }: { phase: SubmitPhase }) {
   if (phase === 'idle' || phase === 'done') return null;
 
   const isServicePhase = phase === 'service-check' || phase === 'service-starting' || phase === 'service-connecting';
+  const isSizePhase = phase === 'checking-size';
 
   return (
     <div className={cn(
       'flex items-center gap-3 p-4 rounded-xl border transition-all duration-300',
       isServicePhase
         ? 'bg-cinema-secondary/8 border-cinema-secondary/20'
+        : isSizePhase
+        ? 'bg-cinema-warm/8 border-cinema-warm/20'
         : 'bg-cinema-accent/8 border-cinema-accent/20',
     )}>
       <div className="flex-shrink-0">
+        {phase === 'checking-size'      && <HardDrive className="w-4 h-4 text-cinema-warm animate-pulse" />}
         {phase === 'service-starting'   && <Server className="w-4 h-4 text-cinema-secondary animate-pulse" />}
         {phase === 'service-connecting' && <Wifi   className="w-4 h-4 text-cinema-secondary animate-pulse" />}
         {phase === 'service-check'      && <Loader2 className="w-4 h-4 text-cinema-secondary animate-spin" />}
-        {!isServicePhase                && <Loader2 className="w-4 h-4 text-cinema-accent animate-spin" />}
+        {!isServicePhase && !isSizePhase && <Loader2 className="w-4 h-4 text-cinema-accent animate-spin" />}
       </div>
       <div className="flex-1 min-w-0">
         <p className={cn(
           'text-sm font-medium',
-          isServicePhase ? 'text-cinema-secondary' : 'text-cinema-accent',
+          isServicePhase ? 'text-cinema-secondary' : isSizePhase ? 'text-cinema-warm' : 'text-cinema-accent',
         )}>
           {PHASE_LABELS[phase]}
         </p>
+        {phase === 'checking-size' && (
+          <p className="text-xs text-cinema-text-dim mt-0.5">
+            Verifying the torrent doesn&apos;t exceed the size limit
+          </p>
+        )}
         {phase === 'service-starting' && (
           <p className="text-xs text-cinema-text-dim mt-0.5">
             This takes about 20–30 seconds on a cold start
@@ -716,6 +727,49 @@ export default function UploadPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
+
+      // ── 0. Check torrent size BEFORE doing anything else ────
+      setSubmitPhase('checking-size');
+
+      // Extract info hash from magnet URI or raw hash
+      let checkHash = hashInput.trim();
+      const magnetHashMatch = checkHash.match(/btih:([a-fA-F0-9]{40})/i);
+      if (magnetHashMatch) checkHash = magnetHashMatch[1];
+      checkHash = checkHash.toUpperCase();
+
+      // Only check if we have a valid-looking hash (40 hex chars)
+      if (/^[A-F0-9]{40}$/.test(checkHash)) {
+        try {
+          const sizeCheckRes = await fetch(
+            `https://apibay.org/q.php?q=${checkHash}`,
+            { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'Mozilla/5.0' } },
+          );
+          if (sizeCheckRes.ok) {
+            const sizeCheckText = await sizeCheckRes.text();
+            if (sizeCheckText.startsWith('[')) {
+              const sizeCheckData = JSON.parse(sizeCheckText);
+              if (Array.isArray(sizeCheckData) && sizeCheckData.length > 0 && !(sizeCheckData.length === 1 && sizeCheckData[0].id === '0')) {
+                const exactMatch = sizeCheckData.find((t: any) => (t.info_hash || '').toUpperCase() === checkHash);
+                const sizeEntry = exactMatch || sizeCheckData[0];
+                const torrentSizeBytes = parseInt(sizeEntry?.size) || 0;
+
+                if (torrentSizeBytes > 0 && torrentSizeBytes > MAX_MOVIE_SIZE_BYTES) {
+                  const sizeGB = (torrentSizeBytes / 1024 / 1024 / 1024).toFixed(2);
+                  const maxGB = (MAX_MOVIE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
+                  setTorrentError(
+                    `This torrent is ${sizeGB} GB which exceeds the ${maxGB} GB limit. Please choose a smaller source.`
+                  );
+                  setSubmitPhase('idle');
+                  return;
+                }
+              }
+            }
+          }
+        } catch {
+          // Size check failed (network, timeout, etc.) — allow the server-side check to handle it
+          // Don't block the submission just because the size check API is unreachable
+        }
+      }
 
       // ── 1. Upload poster ────────────────────────────────────
       let posterUrl: string | undefined;

@@ -24,6 +24,12 @@ export interface SaveIngestMovieParams {
   posterUrl?:   string;
   quality?:     '480p' | '720p' | '1080p' | '4K' | null;
   subtitles?:   { label: string; lang: string; url: string }[];
+  // TMDB metadata
+  tmdb_id?:      number | null;
+  release_date?: string | null;
+  rating?:       number | null;
+  genres?:       string[] | null;
+  runtime?:      number | null;
 }
 
 export interface SaveIngestMovieResult {
@@ -68,7 +74,8 @@ async function probeBlobMeta(
 export async function saveIngestMovie(
   params: SaveIngestMovieParams,
 ): Promise<SaveIngestMovieResult> {
-  const { job, userId, title, description, posterUrl, quality, subtitles } = params;
+  const { job, userId, title, description, posterUrl, quality, subtitles,
+          tmdb_id, release_date, rating, genres, runtime } = params;
 
   if (!job.blob_url) {
     throw new Error('Job is Ready but has no blob_url — cannot save movie');
@@ -113,6 +120,12 @@ export async function saveIngestMovie(
       info_hash:     job.info_hash,
       ingest_job_id: job.job_id,
       uploaded_by:   userId,
+      // TMDB metadata
+      tmdb_id:       tmdb_id ?? null,
+      release_date:  release_date ?? null,
+      rating:        rating ?? null,
+      genres:        genres ?? null,
+      runtime:       runtime ?? null,
     })
     .select('id, blob_url')
     .single();

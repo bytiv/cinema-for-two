@@ -186,6 +186,12 @@ export async function GET(
                   posterUrl:   meta.posterUrl,
                   quality:     meta.quality,
                   subtitles:   meta.subtitles,
+                  // TMDB metadata
+                  tmdb_id:      meta.tmdb_id ?? null,
+                  release_date: meta.release_date ?? null,
+                  rating:       meta.rating ?? null,
+                  genres:       meta.genres ?? null,
+                  runtime:      meta.runtime ?? null,
                 });
 
                 // Enrich the event so the client can show "Watch now"
