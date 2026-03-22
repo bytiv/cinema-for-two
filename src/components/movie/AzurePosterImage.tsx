@@ -65,13 +65,19 @@ export default function AzurePosterImage({
     return <>{fallback ?? null}</>;
   }
 
+  // External URLs (TMDB, etc.) don't need Vercel's image optimizer —
+  // skip it to avoid 402 "Payment Required" on free/hobby plans.
+  const isExternal = !!(resolvedUrl && !resolvedUrl.includes('blob.core.windows.net'));
+
   const imageProps = {
     src: resolvedUrl,
     alt,
     className,
     sizes,
+    unoptimized: isExternal,
     ...(fill ? { fill: true } : { width, height }),
   };
 
+  // eslint-disable-next-line @next/next/no-img-element
   return <Image {...imageProps} />;
 }
