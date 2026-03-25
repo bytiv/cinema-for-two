@@ -427,10 +427,10 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json();
-    const { movie_id, imdb_id, tmdb_id, query, languages, blob_name, replace_lang, skip_urls } = body;
+    const { movie_id, imdb_id, tmdb_id, query, languages, blob_name } = body;
 
     if (!movie_id) return NextResponse.json({ error: 'movie_id required' }, { status: 400 });
-    if (!languages?.length && !replace_lang) return NextResponse.json({ error: 'languages or replace_lang required' }, { status: 400 });
+    if (!languages?.length) return NextResponse.json({ error: 'languages required' }, { status: 400 });
 
     // Get current movie
     const { data: movie } = await supabaseAdmin
@@ -440,25 +440,11 @@ export async function POST(req: NextRequest) {
       .single();
     if (!movie) return NextResponse.json({ error: 'Movie not found' }, { status: 404 });
 
-    let existingSubtitles: { label: string; lang: string; url: string }[] = movie.subtitles || [];
-
-    // If replacing a specific language, remove it from existing and force re-search
-    const urlsToSkip: string[] = skip_urls || [];
-    let needed: string[];
-
-    if (replace_lang) {
-      // Collect the URL being replaced so we skip it
-      const existingSub = existingSubtitles.find((s: any) => s.lang === replace_lang);
-      if (existingSub) urlsToSkip.push(existingSub.url);
-      // Remove the old subtitle for this language
-      existingSubtitles = existingSubtitles.filter((s: any) => s.lang !== replace_lang);
-      needed = [replace_lang];
-    } else {
-      const existingLangs = new Set(existingSubtitles.map((s: any) => s.lang));
-      needed = languages.filter((l: string) => !existingLangs.has(l));
-      if (needed.length === 0) {
-        return NextResponse.json({ message: 'All requested languages already have subtitles', subtitles: existingSubtitles });
-      }
+    const existingSubtitles: { label: string; lang: string; url: string }[] = movie.subtitles || [];
+    const existingLangs = new Set(existingSubtitles.map((s: any) => s.lang));
+    const needed = languages.filter((l: string) => !existingLangs.has(l));
+    if (needed.length === 0) {
+      return NextResponse.json({ message: 'All requested languages already have subtitles', subtitles: existingSubtitles });
     }
 
     // Use best available identifiers
@@ -511,13 +497,7 @@ export async function POST(req: NextRequest) {
       if (candidates.length === 0) { failed.push(lang); continue; }
 
       let success = false;
-      // Filter out candidates we've already tried (by URL)
-      const filteredCandidates = urlsToSkip.length > 0
-        ? candidates.filter((c: SubCandidate) => !urlsToSkip.some((u: string) => c.download_url.includes(u) || u.includes(c.download_url)))
-        : candidates;
-
-      const toTry = filteredCandidates.length > 0 ? filteredCandidates : candidates; // fallback to all if all filtered
-      for (const candidate of toTry.slice(0, 5)) {
+      for (const candidate of candidates.slice(0, 5)) { // try up to 5
         try {
           console.log(`[subs] Trying ${lang} from ${candidate.source} (score=${candidate.score}, release=${candidate.release_name.slice(0, 60)})`);
           const readUrl = await downloadAndUploadSub(candidate.download_url, movie.uploaded_by, lang, candidate.is_zip);

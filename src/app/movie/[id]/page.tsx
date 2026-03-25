@@ -530,7 +530,6 @@ export default function MovieDetailPage() {
   const [showSubtitlePanel, setShowSubtitlePanel] = useState(false);
   const [langSearch, setLangSearch] = useState('');
   const [showLangDropdown, setShowLangDropdown] = useState(false);
-  const [retryingSubLang, setRetryingSubLang] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -919,53 +918,12 @@ export default function MovieDetailPage() {
                 <HardDrive className="w-3.5 h-3.5" />
                 {formatFileSize(movie.file_size)}
               </div>
-              {movie.subtitles && movie.subtitles.length > 0 && movie.subtitles.map((s) => (
-                <div key={s.lang} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 group/sub">
+              {movie.subtitles && movie.subtitles.length > 0 && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default">
                   <Globe className="w-3.5 h-3.5" />
-                  {s.label}
-                  {canEdit && (
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        if (retryingSubLang) return;
-                        setRetryingSubLang(s.lang);
-                        try {
-                          const res = await fetch('/api/subtitles/fetch', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              movie_id: movie.id,
-                              imdb_id: movie.imdb_id || undefined,
-                              tmdb_id: movie.tmdb_id || undefined,
-                              query: movie.title,
-                              languages: [s.lang],
-                              blob_name: movie.blob_name || undefined,
-                              replace_lang: s.lang,
-                              skip_urls: [s.url],
-                            }),
-                          });
-                          const data = await res.json();
-                          if (res.ok && data.subtitles) {
-                            setMovie((prev) => prev ? { ...prev, subtitles: data.subtitles } : prev);
-                            setSubtitleFetchMsg(data.downloaded?.length > 0 ? `Replaced ${s.label} subtitle` : 'No alternative found');
-                          } else {
-                            setSubtitleFetchMsg(data.message || 'No alternative found');
-                          }
-                        } catch {
-                          setSubtitleFetchMsg('Failed to retry');
-                        } finally {
-                          setRetryingSubLang(null);
-                          setTimeout(() => setSubtitleFetchMsg(''), 4000);
-                        }
-                      }}
-                      title={`Try a different ${s.label} subtitle`}
-                      className="ml-0.5 opacity-0 group-hover/sub:opacity-100 transition-opacity text-cinema-text-dim hover:text-cinema-accent"
-                    >
-                      {retryingSubLang === s.lang ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                    </button>
-                  )}
+                  {movie.subtitles.map((s) => s.label).join(', ')}
                 </div>
-              ))}
+              )}
             </div>
 
             {/* Subtitle auto-download section */}
