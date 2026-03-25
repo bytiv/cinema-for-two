@@ -14,9 +14,9 @@ import {
   Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle,
   Plus, Globe, Gauge, Clock, Hash, Magnet, Download, HardDrive,
   Users, Zap, Ban, Loader2, ArrowRight, AlertTriangle, FolderOpen,
-  Server, Wifi, WifiOff, Search, Star, Calendar, Tag,
+  Server, Wifi, WifiOff, Search, Star, Calendar, Tag, ChevronLeft,
 } from 'lucide-react';
-import type { TMDBSearchResult, TMDBMovieDetail, TorrentSearchResult } from '@/types';
+import type { TMDBSearchResult, TMDBMovieDetail, TMDBTVDetail, TMDBSeason, TMDBEpisode, TorrentSearchResult } from '@/types';
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -213,9 +213,26 @@ function JobCard({
   onCancel:    (jobId: string) => void;
   onGoToMovie: (movieId: string) => void;
 }) {
-  const { job, title, hash } = activeJob;
-  const stage      = job?.stage ?? 'Fetching torrent info';
+  const { job, title, hash, startedAt } = activeJob;
+  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+
+  // When job is null, show startup phases based on elapsed time
+  const stage = job?.stage ?? (
+    elapsed < 3 ? 'Submitting job' :
+    elapsed < 15 ? 'Starting server' :
+    elapsed < 45 ? 'Connecting to server' :
+    'Waiting for response'
+  );
   const isTerminal = TERMINAL.has(stage);
+  const isStarting = !job && !isTerminal;
+
+  // Force re-render every 3s while starting so the phase label updates
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!isStarting) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 3000);
+    return () => clearInterval(interval);
+  }, [isStarting]);
 
   return (
     <div className={cn(
@@ -237,6 +254,29 @@ function JobCard({
           {stage === 'Transcoding for playback' ? 'Optimizing' : stage}
         </span>
       </div>
+
+      {/* Startup progress — shown while waiting for server */}
+      {isStarting && (
+        <div className="px-4 pb-3 space-y-2">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-xs text-cinema-text-muted">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-cinema-accent" />
+              <span>{stage}...</span>
+            </div>
+            <span className="text-[11px] text-cinema-text-dim ml-auto">{elapsed}s</span>
+          </div>
+          <div className="h-1.5 bg-cinema-surface rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-cinema-secondary to-cinema-accent rounded-full animate-pulse" style={{ width: `${Math.min(elapsed * 2, 90)}%` }} />
+          </div>
+          <p className="text-[11px] text-cinema-text-dim">
+            {elapsed < 15
+              ? 'Spinning up the download server — this takes a moment on cold starts'
+              : elapsed < 45
+                ? 'Server is starting up, connecting...'
+                : 'Still waiting — the server may be under heavy load'}
+          </p>
+        </div>
+      )}
 
       {/* Warning banner */}
       {job?.warning && (
@@ -412,6 +452,11 @@ export default function UploadPage() {
   const [torrentTagline,       setTorrentTagline]       = useState('');
   const [torrentLanguage,      setTorrentLanguage]      = useState('');
   const [torrentReleaseName,   setTorrentReleaseName]   = useState('');
+  // Series metadata (for TV episodes)
+  const [torrentSeriesName,    setTorrentSeriesName]    = useState('');
+  const [torrentSeasonNum,     setTorrentSeasonNum]     = useState<number | null>(null);
+  const [torrentEpisodeNum,    setTorrentEpisodeNum]    = useState<number | null>(null);
+  const [torrentEpisodeTitle,  setTorrentEpisodeTitle]  = useState('');
 
   // ── Subtitle language preference state ──────────────────────
   const [subtitleLangs,        setSubtitleLangs]        = useState<string[]>(['ar']);
@@ -427,6 +472,14 @@ export default function UploadPage() {
   const [tmdbLoadingDetail, setTmdbLoadingDetail] = useState(false);
   const [tmdbQuality,       setTmdbQuality]       = useState<VideoQuality | null>(null);
   const tmdbSearchTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── TV series state ────────────────────────────────────────
+  const [selectedTV,        setSelectedTV]        = useState<TMDBTVDetail | null>(null);
+  const [tvSeasons,         setTvSeasons]         = useState<TMDBSeason[]>([]);
+  const [selectedSeason,    setSelectedSeason]    = useState<number | null>(null);
+  const [tvEpisodes,        setTvEpisodes]        = useState<TMDBEpisode[]>([]);
+  const [loadingEpisodes,   setLoadingEpisodes]   = useState(false);
+  const [selectedEpisode,   setSelectedEpisode]   = useState<TMDBEpisode | null>(null);
 
   // ── Torrent source search state ─────────────────────────────
   const [allTorrentResults,    setAllTorrentResults]    = useState<TorrentSearchResult[]>([]); // full unfiltered cache
@@ -850,16 +903,9 @@ export default function UploadPage() {
       const blobBaseName = `${user.id}/${Date.now()}-${slug}`;
 
       // ── 4. Submit to /api/ingest/submit (Stage 4 route) ────
-      //    This route handles ensure-container internally and
-      //    emits phase info we can simulate on the client side.
-      //    We show service-check → service-starting → submitting
-      //    based on timing since we can't stream the phase from
-      //    a non-SSE POST response.
-      setSubmitPhase('service-check');
-
-      // After 2s with no response, assume container is starting
-      const phaseTimer = setTimeout(() => setSubmitPhase('service-starting'), 2_000);
-      const connectTimer = setTimeout(() => setSubmitPhase('service-connecting'), 15_000);
+      //    Submit and immediately switch to Active Jobs. The job card
+      //    will show "Starting server..." until SSE events arrive.
+      setSubmitPhase('submitting');
 
       let jobId: string;
       try {
@@ -886,14 +932,16 @@ export default function UploadPage() {
               original_language: torrentLanguage.trim() || undefined,
               source_type:       torrentSourceType.trim() || undefined,
               release_name:      torrentReleaseName.trim() || undefined,
+              // Series metadata
+              series_name:       torrentSeriesName.trim() || undefined,
+              season_number:     torrentSeasonNum ?? undefined,
+              episode_number:    torrentEpisodeNum ?? undefined,
+              episode_title:     torrentEpisodeTitle.trim() || undefined,
               // Subtitle language preference for auto-download
               subtitle_languages: ['en', 'ar', ...subtitleLangs.filter((l) => l !== 'en' && l !== 'ar')],
             },
           }),
         });
-
-        clearTimeout(phaseTimer);
-        clearTimeout(connectTimer);
 
         if (!res.ok) {
           const body = await res.json();
@@ -903,12 +951,8 @@ export default function UploadPage() {
         const data = await res.json();
         jobId = data.job_id;
       } catch (err) {
-        clearTimeout(phaseTimer);
-        clearTimeout(connectTimer);
         throw err;
       }
-
-      setSubmitPhase('submitting');
 
       // ── 5. Add to active jobs + attach SSE ─────────────────
       const streamMeta = {
@@ -947,7 +991,16 @@ export default function UploadPage() {
       setTorrentTagline('');
       setTorrentLanguage('');
       setTorrentReleaseName('');
+      setTorrentSeriesName('');
+      setTorrentSeasonNum(null);
+      setTorrentEpisodeNum(null);
+      setTorrentEpisodeTitle('');
       setSelectedTmdb(null);
+      setSelectedTV(null);
+      setTvSeasons([]);
+      setTvEpisodes([]);
+      setSelectedSeason(null);
+      setSelectedEpisode(null);
       setTmdbQuality(null);
       setSubmitPhase('done');
       setTab('jobs');
@@ -1000,27 +1053,42 @@ export default function UploadPage() {
 
   const handleTmdbQueryChange = (value: string) => {
     setTmdbQuery(value);
-    // Clear selected movie and torrent results when user starts typing again
     if (selectedTmdb) setSelectedTmdb(null);
+    if (selectedTV) { setSelectedTV(null); setTvSeasons([]); setTvEpisodes([]); setSelectedSeason(null); setSelectedEpisode(null); }
     if (torrentSearchResults.length > 0) setTorrentSearchResults([]);
     if (tmdbSearchTimer.current) clearTimeout(tmdbSearchTimer.current);
     if (!value.trim()) { setTmdbResults([]); return; }
     tmdbSearchTimer.current = setTimeout(() => handleTmdbSearch(value), 400);
   };
 
-  const handleTmdbSelect = async (tmdbId: number) => {
+  const handleTmdbSelect = async (tmdbId: number, mediaType?: 'movie' | 'tv') => {
     setTmdbLoadingDetail(true);
     setTmdbError('');
-    // Clear previous movie's torrent results and quality
+    // Clear previous state
     setAllTorrentResults([]);
     setTorrentSearchResults([]);
     setTorrentSearchError('');
     setTmdbQuality(null);
+    setSelectedTV(null);
+    setSelectedTmdb(null);
+    setTvSeasons([]);
+    setTvEpisodes([]);
+    setSelectedSeason(null);
+    setSelectedEpisode(null);
+
     try {
-      const res = await fetch(`/api/tmdb/search?id=${tmdbId}`);
-      if (!res.ok) throw new Error('Failed to load movie details');
-      const data = await res.json();
-      setSelectedTmdb(data.movie);
+      if (mediaType === 'tv') {
+        const res = await fetch(`/api/tmdb/search?tv_id=${tmdbId}`);
+        if (!res.ok) throw new Error('Failed to load TV details');
+        const data = await res.json();
+        setSelectedTV(data.tv);
+        setTvSeasons(data.tv.seasons || []);
+      } else {
+        const res = await fetch(`/api/tmdb/search?id=${tmdbId}`);
+        if (!res.ok) throw new Error('Failed to load movie details');
+        const data = await res.json();
+        setSelectedTmdb(data.movie);
+      }
       setTmdbResults([]);
       setTmdbQuery('');
     } catch (err: any) {
@@ -1032,12 +1100,9 @@ export default function UploadPage() {
 
   const handleTmdbConfirmToTorrent = () => {
     if (!selectedTmdb) return;
-    // Pre-fill the torrent tab with TMDB metadata
     setTorrentTitle(selectedTmdb.title);
     setTorrentDesc(selectedTmdb.overview || '');
-    if (selectedTmdb.poster_url) {
-      setTorrentPosterPreview(selectedTmdb.poster_url);
-    }
+    if (selectedTmdb.poster_url) setTorrentPosterPreview(selectedTmdb.poster_url);
     setTorrentQuality(tmdbQuality);
     setTorrentReleaseDate(selectedTmdb.release_date || '');
     setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
@@ -1046,11 +1111,137 @@ export default function UploadPage() {
     setTorrentTagline(selectedTmdb.tagline || '');
     setTorrentImdbId(selectedTmdb.imdb_id || '');
     setTorrentLanguage(selectedTmdb.language || '');
+    setTorrentSeriesName('');
+    setTorrentSeasonNum(null);
+    setTorrentEpisodeNum(null);
+    setTorrentEpisodeTitle('');
     setTorrentSearchResults([]);
     setTab('torrent');
   };
 
+  // ── TV episode handlers ──────────────────────────────────
+  const handleSeasonSelect = async (seasonNum: number) => {
+    if (!selectedTV) return;
+    setSelectedSeason(seasonNum);
+    setTvEpisodes([]);
+    setSelectedEpisode(null);
+    setLoadingEpisodes(true);
+    try {
+      const res = await fetch(`/api/tmdb/search?season_of=${selectedTV.tmdb_id}&season=${seasonNum}`);
+      if (!res.ok) throw new Error('Failed to load episodes');
+      const data = await res.json();
+      setTvEpisodes(data.episodes || []);
+    } catch (err: any) {
+      setTmdbError(err.message || 'Failed to load episodes');
+    } finally {
+      setLoadingEpisodes(false);
+    }
+  };
+
+  const handleEpisodeSelect = (episode: TMDBEpisode) => {
+    if (!selectedTV) return;
+    setSelectedEpisode(episode);
+  };
+
+  const handleTVConfirmToTorrent = () => {
+    if (!selectedTV || !selectedEpisode) return;
+    const sNum = String(selectedEpisode.season_number).padStart(2, '0');
+    const eNum = String(selectedEpisode.episode_number).padStart(2, '0');
+    const episodeTitle = `${selectedTV.title} S${sNum}E${eNum} - ${selectedEpisode.name}`;
+
+    setTorrentTitle(episodeTitle);
+    setTorrentDesc(selectedEpisode.overview || selectedTV.overview || '');
+    if (selectedTV.poster_url) setTorrentPosterPreview(selectedTV.poster_url);
+    setTorrentQuality(tmdbQuality);
+    setTorrentReleaseDate(selectedEpisode.air_date || '');
+    setTorrentRating(selectedTV.rating ? String(selectedTV.rating) : '');
+    setTorrentGenres(selectedTV.genres?.join(', ') || '');
+    setTorrentRuntime(selectedEpisode.runtime ? String(selectedEpisode.runtime) : '');
+    setTorrentTagline(selectedTV.tagline || '');
+    setTorrentImdbId((selectedTV as any).imdb_id || '');
+    setTorrentLanguage(selectedTV.language || '');
+    setTorrentSeriesName(selectedTV.title);
+    setTorrentSeasonNum(selectedEpisode.season_number);
+    setTorrentEpisodeNum(selectedEpisode.episode_number);
+    setTorrentEpisodeTitle(selectedEpisode.name);
+    setTorrentSearchResults([]);
+    setTab('torrent');
+  };
+
+  const handleTVSearchSources = async () => {
+    if (!selectedTV || !selectedEpisode) return;
+    setTorrentSearching(true);
+    setTorrentSearchError('');
+    setTorrentSearchResults([]);
+    setAllTorrentResults([]);
+    try {
+      const sNum = String(selectedEpisode.season_number).padStart(2, '0');
+      const eNum = String(selectedEpisode.episode_number).padStart(2, '0');
+      const searchQuery = `${selectedTV.title} S${sNum}E${eNum}`;
+      const params = new URLSearchParams({ query: searchQuery });
+      // Pass IMDB ID for better EZTV results
+      const tvImdbId = (selectedTV as any).imdb_id;
+      if (tvImdbId) params.set('imdb_id', tvImdbId);
+
+      const res = await fetch(`/api/torrent/search?${params}`);
+      if (!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      const all = data.results || [];
+      setAllTorrentResults(all);
+      if (tmdbQuality) {
+        const filtered = all.filter((r: TorrentSearchResult) => r.quality === tmdbQuality);
+        const others = all.filter((r: TorrentSearchResult) => r.quality !== tmdbQuality);
+        setTorrentSearchResults([...filtered, ...others]);
+      } else {
+        setTorrentSearchResults(all);
+      }
+      if (!all.length) {
+        setTorrentSearchError('No sources found. Try "I have a torrent" to paste a hash manually.');
+      }
+    } catch (err: any) {
+      setTorrentSearchError(err.message || 'Failed to search');
+    } finally {
+      setTorrentSearching(false);
+    }
+  };
+
+  const handleTVPickTorrentResult = (result: TorrentSearchResult) => {
+    if (!selectedTV || !selectedEpisode) return;
+    if (result.size_bytes > 0 && result.size_bytes > MAX_MOVIE_SIZE_BYTES) {
+      const maxGB = (MAX_MOVIE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
+      alert(`This torrent is ${result.size} which exceeds the ${maxGB} GB limit.`);
+      return;
+    }
+    const sNum = String(selectedEpisode.season_number).padStart(2, '0');
+    const eNum = String(selectedEpisode.episode_number).padStart(2, '0');
+    const episodeTitle = `${selectedTV.title} S${sNum}E${eNum} - ${selectedEpisode.name}`;
+
+    setTorrentTitle(episodeTitle);
+    setTorrentDesc(selectedEpisode.overview || selectedTV.overview || '');
+    if (selectedTV.poster_url) setTorrentPosterPreview(selectedTV.poster_url);
+    setTorrentQuality(tmdbQuality || (result.quality as VideoQuality) || null);
+    setTorrentReleaseDate(selectedEpisode.air_date || '');
+    setTorrentRating(selectedTV.rating ? String(selectedTV.rating) : '');
+    setTorrentGenres(selectedTV.genres?.join(', ') || '');
+    setTorrentRuntime(selectedEpisode.runtime ? String(selectedEpisode.runtime) : '');
+    setTorrentTagline(selectedTV.tagline || '');
+    setTorrentImdbId((selectedTV as any).imdb_id || '');
+    setTorrentLanguage(selectedTV.language || '');
+    setTorrentSeriesName(selectedTV.title);
+    setTorrentSeasonNum(selectedEpisode.season_number);
+    setTorrentEpisodeNum(selectedEpisode.episode_number);
+    setTorrentEpisodeTitle(selectedEpisode.name);
+    setTorrentSourceType(result.source_type || '');
+    setTorrentReleaseName(result.name || '');
+    setHashInput(result.magnet || result.hash);
+    setTorrentSearchResults([]);
+    setAllTorrentResults([]);
+    setTab('torrent');
+  };
+
   const handleSearchTorrentSources = async () => {
+    if (!selectedTmdb && !selectedTV) return;
+    if (selectedTV) { await handleTVSearchSources(); return; }
     if (!selectedTmdb) return;
     setTorrentSearching(true);
     setTorrentSearchError('');
@@ -1104,6 +1295,7 @@ export default function UploadPage() {
   const MAX_MOVIE_SIZE_BYTES = (parseFloat(process.env.NEXT_PUBLIC_MAX_MOVIE_SIZE_GB || '7')) * 1024 * 1024 * 1024;
 
   const handlePickTorrentResult = (result: TorrentSearchResult) => {
+    if (selectedTV && selectedEpisode) { handleTVPickTorrentResult(result); return; }
     if (!selectedTmdb) return;
 
     // Check file size limit
@@ -1645,6 +1837,232 @@ export default function UploadPage() {
               </div>
             )}
 
+            {/* ── TV Series detail card ────────────────────────── */}
+            {selectedTV && (
+              <div className="rounded-2xl overflow-hidden bg-cinema-card/50 border border-cinema-accent/20 animate-fade-in">
+                {/* Back button */}
+                <button
+                  onClick={() => { setSelectedTV(null); setTvSeasons([]); setTvEpisodes([]); setSelectedSeason(null); setSelectedEpisode(null); setTorrentSearchResults([]); setAllTorrentResults([]); }}
+                  className="flex items-center gap-1.5 px-5 pt-4 text-sm text-cinema-text-dim hover:text-cinema-accent transition-colors"
+                >
+                  <ChevronLeft className="w-4 h-4" /> Back to results
+                </button>
+
+                {/* Series info */}
+                <div className="flex gap-4 px-5 pt-3 pb-4">
+                  {selectedTV.poster_url && (
+                    <div className="relative w-28 flex-shrink-0 rounded-xl overflow-hidden aspect-[2/3]">
+                      <img src={selectedTV.poster_url} alt={selectedTV.title} className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 rounded bg-cinema-secondary/20 text-[10px] text-cinema-secondary font-bold">TV SERIES</span>
+                      {selectedTV.status && (
+                        <span className="text-[10px] text-cinema-text-dim">{selectedTV.status}</span>
+                      )}
+                    </div>
+                    <h2 className="font-display text-lg font-bold text-cinema-text leading-tight line-clamp-2">{selectedTV.title}</h2>
+                    <div className="flex items-center gap-2 text-xs text-cinema-text-muted">
+                      {selectedTV.year && <span>{selectedTV.year}</span>}
+                      {selectedTV.rating > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Star className="w-3 h-3 text-cinema-accent" fill="currentColor" />
+                          {selectedTV.rating.toFixed(1)}
+                        </span>
+                      )}
+                      <span>{selectedTV.number_of_seasons} season{selectedTV.number_of_seasons !== 1 ? 's' : ''}</span>
+                    </div>
+                    {selectedTV.genres?.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {selectedTV.genres.slice(0, 4).map((g) => (
+                          <span key={g} className="px-1.5 py-0.5 rounded bg-cinema-secondary/10 text-[10px] text-cinema-secondary-light font-medium">{g}</span>
+                        ))}
+                      </div>
+                    )}
+                    {selectedTV.overview && (
+                      <p className="text-xs text-cinema-text-dim leading-relaxed line-clamp-3">{selectedTV.overview}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Season selector */}
+                <div className="border-t border-cinema-border px-5 py-4 space-y-3">
+                  <label className="text-sm font-medium text-cinema-text-muted">Select Season</label>
+                  <div className="flex flex-wrap gap-2">
+                    {tvSeasons.map((s) => (
+                      <button
+                        key={s.season_number}
+                        onClick={() => handleSeasonSelect(s.season_number)}
+                        className={cn(
+                          'px-3 py-2 rounded-xl border text-xs font-medium transition-all',
+                          selectedSeason === s.season_number
+                            ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent'
+                            : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40',
+                        )}
+                      >
+                        S{String(s.season_number).padStart(2, '0')}
+                        <span className="ml-1 text-cinema-text-dim">({s.episode_count})</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Episode list */}
+                  {loadingEpisodes && (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="w-5 h-5 text-cinema-accent animate-spin" />
+                    </div>
+                  )}
+
+                  {tvEpisodes.length > 0 && (
+                    <div className="space-y-2 max-h-[350px] overflow-y-auto">
+                      {tvEpisodes.map((ep) => (
+                        <button
+                          key={ep.episode_number}
+                          onClick={() => handleEpisodeSelect(ep)}
+                          className={cn(
+                            'w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-all',
+                            selectedEpisode?.episode_number === ep.episode_number
+                              ? 'border-cinema-accent bg-cinema-accent/5'
+                              : 'border-cinema-border bg-cinema-surface hover:border-cinema-accent/30',
+                          )}
+                        >
+                          {ep.still_url && (
+                            <img src={ep.still_url} alt="" className="w-24 h-14 rounded-lg object-cover flex-shrink-0 bg-cinema-card" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-cinema-accent">E{String(ep.episode_number).padStart(2, '0')}</span>
+                              <span className="text-sm font-medium text-cinema-text line-clamp-1">{ep.name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-cinema-text-dim mt-0.5">
+                              {ep.air_date && <span>{ep.air_date}</span>}
+                              {ep.runtime && <span>{ep.runtime}m</span>}
+                              {ep.rating > 0 && <span className="flex items-center gap-0.5"><Star className="w-2.5 h-2.5 text-cinema-accent" fill="currentColor" />{ep.rating.toFixed(1)}</span>}
+                            </div>
+                            {ep.overview && (
+                              <p className="text-[11px] text-cinema-text-dim line-clamp-2 mt-1">{ep.overview}</p>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Quality + subtitle langs + actions (only after episode selected) */}
+                  {selectedEpisode && (
+                    <div className="space-y-4 pt-3 border-t border-cinema-border/50">
+                      {/* Quality selector */}
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                          <Gauge className="w-4 h-4 text-cinema-accent" /> Preferred Quality
+                        </label>
+                        <div className="grid grid-cols-4 gap-2">
+                          {QUALITY_OPTIONS.map((opt) => (
+                            <button key={opt.value} type="button" onClick={() => handleQualityChange(opt.value)}
+                              className={cn('flex flex-col items-center py-2.5 px-3 rounded-xl border text-xs font-medium transition-all duration-200',
+                                tmdbQuality === opt.value ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent' : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-text')}>
+                              <span className="text-sm font-bold">{opt.label}</span>
+                              <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Subtitle languages */}
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                          <Globe className="w-4 h-4 text-cinema-secondary" /> Subtitle Languages
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          <div className="px-2 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">English</div>
+                          <div className="px-2 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">Arabic</div>
+                          {subtitleLangs.filter((c) => c !== 'ar').map((code) => {
+                            const lang = ALL_SUBTITLE_LANGUAGES.find((l) => l.code === code);
+                            return (
+                              <div key={code} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-secondary/10 border border-cinema-secondary/20 text-xs text-cinema-secondary">
+                                {lang?.label || code}
+                                <button onClick={() => setSubtitleLangs((prev) => prev.filter((c2) => c2 !== code))} className="hover:text-cinema-error"><X className="w-3 h-3" /></button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="relative">
+                          <input type="text" placeholder="Add more languages..." value={subLangSearch}
+                            onChange={(e) => setSubLangSearch(e.target.value)} onFocus={() => setShowSubLangDropdown(true)}
+                            className="w-full rounded-lg bg-cinema-surface border border-cinema-border px-3 py-1.5 text-xs text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-secondary/50 transition-all" />
+                          {showSubLangDropdown && (
+                            <div className="absolute z-20 top-full left-0 right-0 mt-1 max-h-36 overflow-y-auto rounded-lg bg-cinema-card border border-cinema-border shadow-xl">
+                              {ALL_SUBTITLE_LANGUAGES.filter((l) => l.code !== 'en' && l.code !== 'ar' && !subtitleLangs.includes(l.code))
+                                .filter((l) => !subLangSearch || l.label.toLowerCase().includes(subLangSearch.toLowerCase()))
+                                .slice(0, 15).map((l) => (
+                                  <button key={l.code} onClick={() => { setSubtitleLangs((prev) => [...prev, l.code]); setSubLangSearch(''); setShowSubLangDropdown(false); }}
+                                    className="w-full text-left px-3 py-1.5 text-xs text-cinema-text-muted hover:bg-cinema-secondary/10 hover:text-cinema-secondary transition-colors">{l.label}</button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Two paths */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <Button onClick={handleTVSearchSources} size="lg" className="w-full"
+                          icon={torrentSearching ? undefined : <Search className="w-4 h-4" />} loading={torrentSearching}>
+                          {torrentSearching ? 'Searching...' : 'Search for sources'}
+                        </Button>
+                        <Button onClick={handleTVConfirmToTorrent} size="lg" variant="secondary" className="w-full" icon={<Hash className="w-4 h-4" />}>
+                          I have a torrent
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Torrent search error */}
+                {torrentSearchError && !torrentSearching && torrentSearchResults.length === 0 && (
+                  <div className="mx-5 mb-4 flex items-center gap-3 p-3 rounded-xl bg-cinema-warm/10 border border-cinema-warm/20">
+                    <AlertTriangle className="w-4 h-4 text-cinema-warm flex-shrink-0" />
+                    <p className="text-sm text-cinema-warm">{torrentSearchError}</p>
+                  </div>
+                )}
+
+                {/* Torrent search results */}
+                {torrentSearchResults.length > 0 && (
+                  <div className="border-t border-cinema-border">
+                    <div className="px-5 py-3 flex items-center justify-between">
+                      <p className="text-sm font-medium text-cinema-text-muted">{torrentSearchResults.length} source{torrentSearchResults.length !== 1 ? 's' : ''} found</p>
+                      <button onClick={() => setTorrentSearchResults([])} className="text-xs text-cinema-text-dim hover:text-cinema-text-muted transition-colors">Clear</button>
+                    </div>
+                    <div className="px-5 pb-4 space-y-2 max-h-[400px] overflow-y-auto">
+                      {torrentSearchResults.map((r, i) => {
+                        const isOversized = r.size_bytes > 0 && r.size_bytes > MAX_MOVIE_SIZE_BYTES;
+                        return (
+                          <div key={`${r.hash}-${i}`} className={cn('flex items-start gap-3 p-3 rounded-xl border transition-all group/result',
+                            isOversized ? 'bg-cinema-surface/50 border-cinema-border/50 opacity-60' : 'bg-cinema-surface border-cinema-border hover:border-cinema-accent/30')}>
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                              <p className={cn('text-sm font-medium truncate leading-snug', isOversized ? 'text-cinema-text-dim' : 'text-cinema-text')}>{r.name}</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                <span className="px-2 py-0.5 rounded-md bg-cinema-accent/10 text-[11px] text-cinema-accent font-semibold">{r.size}</span>
+                                {r.quality && <span className="px-2 py-0.5 rounded-md bg-cinema-warm/10 text-[11px] text-cinema-warm font-medium">{r.quality}</span>}
+                                {r.seeders != null && <span className="px-2 py-0.5 rounded-md bg-cinema-success/10 text-[11px] text-cinema-success">S:{r.seeders}</span>}
+                              </div>
+                            </div>
+                            {isOversized ? (
+                              <span className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-error/5 text-cinema-error/50 border border-cinema-error/10 cursor-not-allowed">Exceeds limit</span>
+                            ) : (
+                              <button onClick={() => handlePickTorrentResult(r)} className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-accent/10 text-cinema-accent border border-cinema-accent/20 hover:bg-cinema-accent/20 transition-all mt-0.5">
+                                <Download className="w-3.5 h-3.5" /> Select
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Loading detail */}
             {tmdbLoadingDetail && (
               <div className="flex items-center justify-center py-12">
@@ -1653,12 +2071,12 @@ export default function UploadPage() {
             )}
 
             {/* Search results grid */}
-            {!selectedTmdb && tmdbResults.length > 0 && (
+            {!selectedTmdb && !selectedTV && tmdbResults.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 {tmdbResults.map((m) => (
                   <button
-                    key={m.tmdb_id}
-                    onClick={() => handleTmdbSelect(m.tmdb_id)}
+                    key={`${m.media_type}-${m.tmdb_id}`}
+                    onClick={() => handleTmdbSelect(m.tmdb_id, m.media_type)}
                     className="group text-left rounded-xl overflow-hidden bg-cinema-card/50 border border-cinema-border hover:border-cinema-accent/50 transition-all duration-300 hover:shadow-[0_4px_20px_rgba(232,160,191,0.15)] hover:-translate-y-1"
                   >
                     {/* Poster */}
@@ -1677,6 +2095,12 @@ export default function UploadPage() {
                           <span className="text-[11px] font-bold text-white">{m.rating.toFixed(1)}</span>
                         </div>
                       )}
+                      {/* Media type badge */}
+                      {m.media_type === 'tv' && (
+                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-cinema-secondary/80 backdrop-blur-sm">
+                          <span className="text-[10px] font-bold text-white">TV</span>
+                        </div>
+                      )}
                       {/* Gradient */}
                       <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent" />
                     </div>
@@ -1685,8 +2109,8 @@ export default function UploadPage() {
                       <h4 className="text-sm font-semibold text-cinema-text line-clamp-1">{m.title}</h4>
                       <div className="flex items-center gap-1.5 mt-1 text-[11px] text-cinema-text-dim">
                         {m.year && <span>{m.year}</span>}
-                        {m.year && m.genres.length > 0 && <span className="text-cinema-text-dim/40">·</span>}
-                        {m.genres.length > 0 && <span className="truncate">{m.genres.slice(0, 2).join(', ')}</span>}
+                        {m.year && m.genres?.length > 0 && <span className="text-cinema-text-dim/40">·</span>}
+                        {m.genres?.length > 0 && <span className="truncate">{m.genres.slice(0, 2).join(', ')}</span>}
                       </div>
                     </div>
                   </button>
@@ -1695,20 +2119,20 @@ export default function UploadPage() {
             )}
 
             {/* Empty state */}
-            {!selectedTmdb && !tmdbSearching && tmdbResults.length === 0 && tmdbQuery.trim().length === 0 && (
+            {!selectedTmdb && !selectedTV && !tmdbSearching && tmdbResults.length === 0 && tmdbQuery.trim().length === 0 && (
               <div className="text-center py-16">
                 <div className="w-16 h-16 rounded-2xl bg-cinema-card border border-cinema-border flex items-center justify-center mx-auto mb-4">
                   <Search className="w-8 h-8 text-cinema-text-dim opacity-40" />
                 </div>
-                <p className="text-cinema-text-muted font-medium">Search for any movie</p>
+                <p className="text-cinema-text-muted font-medium">Search for any movie or TV show</p>
                 <p className="text-sm text-cinema-text-dim mt-1">We&apos;ll fetch details from TMDB — title, poster, rating, genres, runtime</p>
               </div>
             )}
 
             {/* No results */}
-            {!selectedTmdb && !tmdbSearching && tmdbResults.length === 0 && tmdbQuery.trim().length > 0 && (
+            {!selectedTmdb && !selectedTV && !tmdbSearching && tmdbResults.length === 0 && tmdbQuery.trim().length > 0 && (
               <div className="text-center py-12">
-                <p className="text-cinema-text-muted">No movies found for &ldquo;{tmdbQuery}&rdquo;</p>
+                <p className="text-cinema-text-muted">No results found for &ldquo;{tmdbQuery}&rdquo;</p>
                 <p className="text-sm text-cinema-text-dim mt-1">Try a different title or spelling</p>
               </div>
             )}

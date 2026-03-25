@@ -74,6 +74,11 @@ export interface Movie {
   original_language: string | null; // from TMDB
   source_type: string | null;     // e.g. 'BluRay', 'WEB-DL', 'WEBRip'
   release_name: string | null;    // original torrent/release name for subtitle matching
+  // Series metadata (null for movies)
+  series_name: string | null;
+  season_number: number | null;
+  episode_number: number | null;
+  episode_title: string | null;
   subtitle_options: Record<string, {
     candidates: { source_url: string; release_name: string; score: number; is_zip: boolean; source: string }[];
     downloaded: { url: string; release_name: string }[];
@@ -104,6 +109,7 @@ export interface TMDBSearchResult {
   vote_count: number;
   genres: string[];
   language: string;
+  media_type?: 'movie' | 'tv'; // from multi-search
 }
 
 export interface TMDBMovieDetail extends TMDBSearchResult {
@@ -111,6 +117,35 @@ export interface TMDBMovieDetail extends TMDBSearchResult {
   runtime: number | null;
   tagline: string;
   imdb_id: string | null;
+}
+
+export interface TMDBTVDetail extends TMDBSearchResult {
+  backdrop_url: string | null;
+  tagline: string;
+  number_of_seasons: number;
+  number_of_episodes: number;
+  seasons: TMDBSeason[];
+  status: string;
+}
+
+export interface TMDBSeason {
+  season_number: number;
+  name: string;
+  episode_count: number;
+  air_date: string | null;
+  poster_url: string | null;
+}
+
+export interface TMDBEpisode {
+  episode_number: number;
+  season_number: number;
+  name: string;
+  overview: string;
+  air_date: string | null;
+  runtime: number | null;
+  still_url: string | null;
+  rating: number;
+  vote_count: number;
 }
 
 export interface TorrentSearchResult {

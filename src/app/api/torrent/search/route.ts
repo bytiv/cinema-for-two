@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const nodeFetch = require('node-fetch');
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const HttpsProxyAgent = require('https-proxy-agent');
 
-// ── Proxy-aware fetch ────────────────────────────────────────────────────────
-// Phase 1 uses direct fetch(). If results are scarce, Phase 2 retries through
-// free rotating proxies using node-fetch + https-proxy-agent (CJS, webpack-safe).
+// ── Fetch helper ────────────────────────────────────────────────────────
 
 type FetchFn = (url: string, init?: any) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
@@ -14,65 +8,6 @@ const directFetch: FetchFn = async (url, init = {}) => {
   const res = await fetch(url, init);
   return res;
 };
-
-function makeProxyFetch(proxyUrl: string): FetchFn {
-  const agent = new HttpsProxyAgent(proxyUrl);
-  return async (url: string, init: any = {}) => {
-    const res = await nodeFetch(url, { ...init, agent, timeout: 10000 });
-    return {
-      ok: res.ok,
-      status: res.status,
-      text: () => res.text(),
-    };
-  };
-}
-
-// Cache free proxies for 10 minutes
-let _proxyCache: string[] = [];
-let _proxyCacheTime = 0;
-
-async function getFreeProxies(): Promise<string[]> {
-  if (_proxyCache.length > 0 && Date.now() - _proxyCacheTime < 600_000) return _proxyCache;
-
-  const sources = [
-    'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.json',
-    'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-  ];
-  const proxies: string[] = [];
-
-  for (const src of sources) {
-    try {
-      const res = await fetch(src, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) continue;
-      const text = await res.text();
-      if (src.endsWith('.json')) {
-        try {
-          const data = JSON.parse(text);
-          if (Array.isArray(data)) {
-            for (const p of data.slice(0, 40)) {
-              if (p.ip && p.port) proxies.push(`http://${p.ip}:${p.port}`);
-            }
-          }
-        } catch {}
-      } else {
-        const lines = text.split('\n').filter((l: string) => l.trim().match(/^\d+\.\d+\.\d+\.\d+:\d+$/));
-        for (const line of lines.slice(0, 40)) proxies.push(`http://${line.trim()}`);
-      }
-      if (proxies.length >= 15) break;
-    } catch { continue; }
-  }
-
-  // Shuffle
-  for (let i = proxies.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [proxies[i], proxies[j]] = [proxies[j], proxies[i]];
-  }
-
-  _proxyCache = proxies;
-  _proxyCacheTime = Date.now();
-  if (proxies.length > 0) console.log(`[proxy] Cached ${proxies.length} free proxies`);
-  return proxies;
-}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -269,7 +204,7 @@ async function search1337x(query: string, fetchFn: FetchFn = directFetch): Promi
 
 // ── Scraper: The Pirate Bay ──────────────────────────────────────────────────
 
-async function searchTPB(query: string, fetchFn: FetchFn = directFetch): Promise<TorrentResult[]> {
+async function searchTPB(query: string, fetchFn: FetchFn = directFetch, isTV: boolean = false): Promise<TorrentResult[]> {
   const apis = [
     { base: 'https://apibay.org', path: '/q.php' },
     { base: 'https://piratebay.live', path: '/q.php' },
@@ -278,7 +213,9 @@ async function searchTPB(query: string, fetchFn: FetchFn = directFetch): Promise
   ];
   for (const { base, path } of apis) {
     try {
-      const url = `${base}${path}?q=${encodeURIComponent(query)}&cat=207`;
+      // cat=205 for TV, cat=207 for HD Movies, cat=0 for all
+      const cat = isTV ? '205' : '207';
+      const url = `${base}${path}?q=${encodeURIComponent(query)}&cat=${cat}`;
       const res = await fetchFn(url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
         signal: AbortSignal.timeout(10000),
@@ -322,12 +259,95 @@ async function searchTPB(query: string, fetchFn: FetchFn = directFetch): Promise
   return [];
 }
 
+// ── Scraper: EZTV (TV episodes) ─────────────────────────────────────────────
+
+async function searchEZTV(query: string, imdbId?: string, fetchFn: FetchFn = directFetch): Promise<TorrentResult[]> {
+  // Try multiple EZTV domains
+  const domains = ['eztvx.to', 'eztv.re', 'eztv.wf'];
+  
+  for (const domain of domains) {
+    try {
+      // EZTV API works best with imdb_id, falls back to page-based search
+      let url: string;
+      if (imdbId) {
+        const numericId = imdbId.replace('tt', '');
+        url = `https://${domain}/api/get-torrents?imdb_id=${numericId}&limit=100`;
+      } else {
+        // Extract show name without S##E## for EZTV search
+        const showName = query.replace(/\s*S\d{2}E\d{2}.*/i, '').trim();
+        url = `https://${domain}/api/get-torrents?q=${encodeURIComponent(showName)}&limit=100`;
+      }
+      
+      const res = await fetchFn(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (text.startsWith('<')) continue;
+      const data = JSON.parse(text);
+      if (!data.torrents || !Array.isArray(data.torrents)) continue;
+
+      const trackers = [
+        'udp://tracker.opentrackr.org:1337/announce',
+        'udp://open.stealth.si:80/announce',
+        'udp://tracker.torrent.eu.org:451/announce',
+        'udp://exodus.desync.com:6969/announce',
+      ];
+      const trStr = trackers.map(tr => `&tr=${encodeURIComponent(tr)}`).join('');
+
+      // Extract S##E## from query to filter results
+      const epMatch = query.match(/S(\d{2})E(\d{2})/i);
+      const targetSeason = epMatch ? epMatch[1] : null;
+      const targetEpisode = epMatch ? epMatch[2] : null;
+
+      let torrents = data.torrents;
+      
+      // Filter by episode if we have a target
+      if (targetSeason && targetEpisode) {
+        const pattern = new RegExp(`S${targetSeason}E${targetEpisode}`, 'i');
+        torrents = torrents.filter((t: any) => {
+          const name = (t.title || t.filename || '').toString();
+          return pattern.test(name) || 
+                 (t.season === targetSeason && t.episode === targetEpisode);
+        });
+      }
+
+      const results = torrents.slice(0, 20).map((t: any) => {
+        const hash = (t.hash || '').toUpperCase();
+        const name = t.title || t.filename || 'Unknown';
+        const sizeBytes = parseInt(t.size_bytes) || 0;
+        const sizeStr = sizeBytes > 1024 * 1024 * 1024
+          ? `${(sizeBytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+          : `${(sizeBytes / 1024 / 1024).toFixed(0)} MB`;
+        return {
+          name, hash, size: sizeStr, size_bytes: sizeBytes,
+          seeders: parseInt(t.seeds) || 0, leechers: parseInt(t.peers) || 0,
+          quality: detectQuality(name), source_type: detectSourceType(name),
+          codec: detectCodec(name), origin: 'EZTV',
+          magnet: t.magnet_url || `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}${trStr}`,
+          score: 0,
+        } satisfies TorrentResult;
+      }).filter((r: TorrentResult) => r.hash && r.hash.length >= 32);
+      
+      if (results.length > 0) {
+        console.log(`[EZTV] Found ${results.length} results via ${domain}`);
+        return results;
+      }
+    } catch (e) {
+      console.warn(`[EZTV] ${domain} failed:`, (e as Error).message);
+    }
+  }
+  return [];
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('query');
   const yearStr = searchParams.get('year');
+  const imdbId = searchParams.get('imdb_id');
 
   if (!query) {
     return NextResponse.json({ error: 'query parameter required' }, { status: 400 });
@@ -336,41 +356,36 @@ export async function GET(request: Request) {
   const year = yearStr ? parseInt(yearStr, 10) : undefined;
   const queryWithYear = year ? `${query} ${year}` : query;
 
-  try {
-    const [ytsResults, results1337x, results1337xPlain, tpbResults, tpbResultsPlain] = await Promise.allSettled([
-      searchYTS(query, year),
-      search1337x(queryWithYear),
-      year ? search1337x(query) : Promise.resolve([]),
-      searchTPB(queryWithYear),
-      year ? searchTPB(query) : Promise.resolve([]),
-    ]);
+  // Detect if this looks like a TV episode search (contains S##E##)
+  const isTVSearch = /S\d{2}E\d{2}/i.test(query);
 
-    let all: TorrentResult[] = [
-      ...(ytsResults.status === 'fulfilled' ? ytsResults.value : []),
-      ...(results1337x.status === 'fulfilled' ? results1337x.value : []),
-      ...(results1337xPlain.status === 'fulfilled' ? results1337xPlain.value : []),
-      ...(tpbResults.status === 'fulfilled' ? tpbResults.value : []),
-      ...(tpbResultsPlain.status === 'fulfilled' ? tpbResultsPlain.value : []),
-    ];
+  try {
+    const searches: Promise<TorrentResult[]>[] = [];
+
+    if (isTVSearch) {
+      // For TV: search 1337x, TPB (TV category), and EZTV
+      searches.push(search1337x(query));
+      searches.push(searchTPB(query, directFetch, true));  // TV category
+      searches.push(searchEZTV(query, imdbId || undefined));
+      // Also try TPB with all categories as fallback
+      searches.push(searchTPB(query, directFetch, false));
+    } else {
+      // For movies: original behavior
+      searches.push(searchYTS(query, year));
+      searches.push(search1337x(queryWithYear));
+      if (year) searches.push(search1337x(query));
+      searches.push(searchTPB(queryWithYear));
+      if (year) searches.push(searchTPB(query));
+    }
+
+    const settled = await Promise.allSettled(searches);
+
+    let all: TorrentResult[] = [];
+    for (const result of settled) {
+      if (result.status === 'fulfilled') all.push(...result.value);
+    }
 
     console.log(`[search] Direct: ${all.length} results`);
-
-    // ═══ Phase 2: If few results, retry through free proxies ═══
-    if (all.length < 5) {
-      const proxies = await getFreeProxies();
-      for (let i = 0; i < Math.min(3, proxies.length) && all.length < 10; i++) {
-        try {
-          const pFetch = makeProxyFetch(proxies[i]);
-          const [pYts, pTpb] = await Promise.allSettled([
-            searchYTS(query, year, pFetch),
-            searchTPB(query, pFetch),
-          ]);
-          if (pYts.status === 'fulfilled') all.push(...pYts.value);
-          if (pTpb.status === 'fulfilled') all.push(...pTpb.value);
-          console.log(`[proxy] ${proxies[i]} → ${all.length} total`);
-        } catch { continue; }
-      }
-    }
 
     // Deduplicate by hash
     const seen = new Set<string>();

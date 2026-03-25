@@ -50,15 +50,13 @@ export default function MovieCard({ movie }: MovieCardProps) {
           </div>
         )}
 
-        {/* Hover overlay — only shows on devices with hover (desktop) */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 ease-in-out hidden sm:flex flex-col justify-end p-3.5">
+        {/* Hover overlay — shows on hover on all devices */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 ease-in-out flex flex-col justify-end p-3.5">
 
-          {/* Title */}
           <h3 className="font-display text-[15px] font-semibold text-cinema-accent leading-snug line-clamp-2 drop-shadow-md">
             {movie.title}
           </h3>
 
-          {/* Year + Rating row */}
           <div className="flex items-center justify-between mt-1.5">
             <div className="flex items-center gap-2 text-xs text-cinema-text-muted">
               {year && <span>{year}</span>}
@@ -73,7 +71,6 @@ export default function MovieCard({ movie }: MovieCardProps) {
             )}
           </div>
 
-          {/* Genres */}
           {genres.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-2">
               {genres.slice(0, 3).map((g) => (
@@ -84,25 +81,24 @@ export default function MovieCard({ movie }: MovieCardProps) {
             </div>
           )}
 
-          {/* Description snippet */}
+          {/* Description — desktop only */}
           {overview && (
             <p className="text-[11px] text-cinema-text-dim italic leading-relaxed mt-2 line-clamp-3">
               {overview}
             </p>
           )}
 
-          {/* Play button hint */}
           <div className="flex items-center gap-1.5 mt-2.5 text-cinema-accent text-xs font-medium opacity-80">
             <Play className="w-3.5 h-3.5" fill="currentColor" />
             <span>Watch now</span>
           </div>
         </div>
 
-        {/* Static bottom scrim — visible when NOT hovering (on desktop it hides on hover) */}
-        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none sm:group-hover:opacity-0 transition-opacity duration-300" />
+        {/* Static bottom scrim — hides on hover */}
+        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none group-hover:opacity-0 transition-opacity duration-300" />
 
-        {/* Static title + year — visible when NOT hovering (on desktop it hides on hover) */}
-        <div className="absolute inset-x-0 bottom-0 p-3 pointer-events-none sm:group-hover:opacity-0 transition-opacity duration-300">
+        {/* Static title + year — hides on hover */}
+        <div className="absolute inset-x-0 bottom-0 p-3 pointer-events-none group-hover:opacity-0 transition-opacity duration-300">
           <h3 className="font-display text-sm font-semibold text-white leading-snug line-clamp-2 drop-shadow-md">
             {movie.title}
           </h3>

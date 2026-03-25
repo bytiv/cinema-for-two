@@ -422,9 +422,15 @@ async function searchYifySubs(
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = createServerSupabaseClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Allow internal server-to-server calls with service key
+    const serviceKey = req.headers.get('x-service-key');
+    const isInternalCall = serviceKey === process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!isInternalCall) {
+      const supabase = createServerSupabaseClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
     const body = await req.json();
     const { movie_id, imdb_id, tmdb_id, query, languages, blob_name } = body;

@@ -38,7 +38,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { job_id, blob_url, title, description, quality, poster_url, subtitles,
             tmdb_id, release_date, rating, genres, runtime,
-            tagline, imdb_id, original_language, source_type, release_name } = body;
+            tagline, imdb_id, original_language, source_type, release_name,
+            series_name, season_number, episode_number, episode_title } = body;
 
     if (!job_id || !blob_url || !title) {
       return NextResponse.json({ error: 'job_id, blob_url, and title are required' }, { status: 400 });
@@ -115,6 +116,10 @@ export async function POST(req: NextRequest) {
         original_language:  original_language ?? null,
         source_type:        source_type ?? null,
         release_name:       release_name ?? null,
+        series_name:        series_name ?? null,
+        season_number:      season_number ?? null,
+        episode_number:     episode_number ?? null,
+        episode_title:      episode_title ?? null,
       })
       .select('id')
       .single();

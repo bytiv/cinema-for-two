@@ -197,6 +197,10 @@ export async function GET(
                   original_language: meta.original_language ?? null,
                   source_type:       meta.source_type ?? null,
                   release_name:      meta.release_name ?? null,
+                  series_name:       meta.series_name ?? null,
+                  season_number:     meta.season_number ?? null,
+                  episode_number:    meta.episode_number ?? null,
+                  episode_title:     meta.episode_title ?? null,
                 });
 
                 // ── Auto-download subtitles in the background ──────
@@ -209,7 +213,10 @@ export async function GET(
                       const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
                       const fetchRes = await fetch(`${baseUrl}/api/subtitles/fetch`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-service-key': process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+                        },
                         body: JSON.stringify({
                           movie_id: movieId,
                           imdb_id: meta.imdb_id || null,
