@@ -2039,12 +2039,42 @@ export default function UploadPage() {
                         return (
                           <div key={`${r.hash}-${i}`} className={cn('flex items-start gap-3 p-3 rounded-xl border transition-all group/result',
                             isOversized ? 'bg-cinema-surface/50 border-cinema-border/50 opacity-60' : 'bg-cinema-surface border-cinema-border hover:border-cinema-accent/30')}>
-                            <div className="flex-1 min-w-0 space-y-1.5">
+                            <div className="flex-1 min-w-0">
                               <p className={cn('text-sm font-medium truncate leading-snug', isOversized ? 'text-cinema-text-dim' : 'text-cinema-text')}>{r.name}</p>
-                              <div className="flex flex-wrap gap-1.5">
-                                <span className="px-2 py-0.5 rounded-md bg-cinema-accent/10 text-[11px] text-cinema-accent font-semibold">{r.size}</span>
-                                {r.quality && <span className="px-2 py-0.5 rounded-md bg-cinema-warm/10 text-[11px] text-cinema-warm font-medium">{r.quality}</span>}
-                                {r.seeders != null && <span className="px-2 py-0.5 rounded-md bg-cinema-success/10 text-[11px] text-cinema-success">S:{r.seeders}</span>}
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                {/* Seeders */}
+                                <span className={cn(
+                                  'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium',
+                                  r.seeders >= 20 ? 'bg-cinema-success/10 text-cinema-success' :
+                                  r.seeders >= 5  ? 'bg-cinema-warm/10 text-cinema-warm' :
+                                                     'bg-cinema-error/10 text-cinema-error',
+                                )}>
+                                  <Users className="w-3 h-3" />
+                                  {r.seeders}
+                                </span>
+                                {/* Size */}
+                                <span className={cn(
+                                  'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px]',
+                                  isOversized ? 'bg-cinema-error/10 text-cinema-error font-medium' : 'bg-cinema-card text-cinema-text-dim',
+                                )}>
+                                  <HardDrive className="w-3 h-3" />
+                                  {r.size}
+                                  {isOversized && <span className="ml-0.5">· Too large</span>}
+                                </span>
+                                {/* Quality */}
+                                {r.quality && (
+                                  <span className="px-2 py-0.5 rounded-md bg-cinema-accent/10 text-[11px] text-cinema-accent font-medium">{r.quality}</span>
+                                )}
+                                {/* Source type */}
+                                {r.source_type && (
+                                  <span className="px-2 py-0.5 rounded-md bg-cinema-secondary/10 text-[11px] text-cinema-secondary font-medium">{r.source_type}</span>
+                                )}
+                                {/* Codec */}
+                                {r.codec && (
+                                  <span className="px-2 py-0.5 rounded-md bg-cinema-card text-[11px] text-cinema-text-dim">{r.codec}</span>
+                                )}
+                                {/* Origin */}
+                                <span className="px-2 py-0.5 rounded-md bg-cinema-card text-[11px] text-cinema-text-dim">{r.origin}</span>
                               </div>
                             </div>
                             {isOversized ? (
