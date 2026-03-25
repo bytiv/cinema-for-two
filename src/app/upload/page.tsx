@@ -49,6 +49,27 @@ const QUALITY_OPTIONS: { value: VideoQuality; label: string; desc: string }[] = 
   { value: '4K',    label: '4K',    desc: 'Ultra HD' },
 ];
 
+const ALL_SUBTITLE_LANGUAGES: { code: string; label: string }[] = [
+  { code: 'af', label: 'Afrikaans' }, { code: 'sq', label: 'Albanian' }, { code: 'am', label: 'Amharic' },
+  { code: 'ar', label: 'Arabic' }, { code: 'hy', label: 'Armenian' }, { code: 'bn', label: 'Bengali' },
+  { code: 'bs', label: 'Bosnian' }, { code: 'bg', label: 'Bulgarian' }, { code: 'ca', label: 'Catalan' },
+  { code: 'zh', label: 'Chinese' }, { code: 'hr', label: 'Croatian' }, { code: 'cs', label: 'Czech' },
+  { code: 'da', label: 'Danish' }, { code: 'nl', label: 'Dutch' }, { code: 'en', label: 'English' },
+  { code: 'et', label: 'Estonian' }, { code: 'fi', label: 'Finnish' }, { code: 'fr', label: 'French' },
+  { code: 'ka', label: 'Georgian' }, { code: 'de', label: 'German' }, { code: 'el', label: 'Greek' },
+  { code: 'he', label: 'Hebrew' }, { code: 'hi', label: 'Hindi' }, { code: 'hu', label: 'Hungarian' },
+  { code: 'is', label: 'Icelandic' }, { code: 'id', label: 'Indonesian' }, { code: 'it', label: 'Italian' },
+  { code: 'ja', label: 'Japanese' }, { code: 'ko', label: 'Korean' }, { code: 'ku', label: 'Kurdish' },
+  { code: 'lv', label: 'Latvian' }, { code: 'lt', label: 'Lithuanian' }, { code: 'ms', label: 'Malay' },
+  { code: 'ml', label: 'Malayalam' }, { code: 'no', label: 'Norwegian' }, { code: 'fa', label: 'Persian' },
+  { code: 'pl', label: 'Polish' }, { code: 'pt', label: 'Portuguese' }, { code: 'ro', label: 'Romanian' },
+  { code: 'ru', label: 'Russian' }, { code: 'sr', label: 'Serbian' }, { code: 'sk', label: 'Slovak' },
+  { code: 'sl', label: 'Slovenian' }, { code: 'es', label: 'Spanish' }, { code: 'sw', label: 'Swahili' },
+  { code: 'sv', label: 'Swedish' }, { code: 'tl', label: 'Tagalog' }, { code: 'ta', label: 'Tamil' },
+  { code: 'te', label: 'Telugu' }, { code: 'th', label: 'Thai' }, { code: 'tr', label: 'Turkish' },
+  { code: 'uk', label: 'Ukrainian' }, { code: 'ur', label: 'Urdu' }, { code: 'vi', label: 'Vietnamese' },
+];
+
 type Tab = 'direct' | 'torrent' | 'search' | 'jobs';
 
 // ─────────────────────────────────────────────────────────────
@@ -390,10 +411,12 @@ export default function UploadPage() {
   const [torrentImdbId,        setTorrentImdbId]        = useState('');
   const [torrentTagline,       setTorrentTagline]       = useState('');
   const [torrentLanguage,      setTorrentLanguage]      = useState('');
+  const [torrentReleaseName,   setTorrentReleaseName]   = useState('');
 
   // ── Subtitle language preference state ──────────────────────
-  const [subtitleSecondLang,   setSubtitleSecondLang]   = useState<string>('');
-  const [subtitleLangSaved,    setSubtitleLangSaved]    = useState(false);
+  const [subtitleLangs,        setSubtitleLangs]        = useState<string[]>(['ar']);
+  const [subLangSearch,        setSubLangSearch]        = useState('');
+  const [showSubLangDropdown,  setShowSubLangDropdown]  = useState(false);
 
   // ── TMDB search state ───────────────────────────────────────
   const [tmdbQuery,         setTmdbQuery]         = useState('');
@@ -439,9 +462,8 @@ export default function UploadPage() {
         .single();
       if (fullProfile?.subtitle_languages) {
         const langs: string[] = fullProfile.subtitle_languages;
-        const secondLang = langs.find((l: string) => l !== 'en') || '';
-        setSubtitleSecondLang(secondLang);
-        if (secondLang) setSubtitleLangSaved(true);
+        const extraLangs = langs.filter((l: string) => l !== 'en' && l !== 'ar');
+        if (extraLangs.length > 0) setSubtitleLangs((prev) => [...new Set([...prev, ...extraLangs])]);
       }
 
       const { data: rows } = await supabase
@@ -863,8 +885,9 @@ export default function UploadPage() {
               imdb_id:           torrentImdbId.trim() || undefined,
               original_language: torrentLanguage.trim() || undefined,
               source_type:       torrentSourceType.trim() || undefined,
+              release_name:      torrentReleaseName.trim() || undefined,
               // Subtitle language preference for auto-download
-              subtitle_languages: subtitleSecondLang ? ['en', subtitleSecondLang] : ['en'],
+              subtitle_languages: ['en', 'ar', ...subtitleLangs.filter((l) => l !== 'en' && l !== 'ar')],
             },
           }),
         });
@@ -923,6 +946,7 @@ export default function UploadPage() {
       setTorrentImdbId('');
       setTorrentTagline('');
       setTorrentLanguage('');
+      setTorrentReleaseName('');
       setSelectedTmdb(null);
       setTmdbQuality(null);
       setSubmitPhase('done');
@@ -1104,6 +1128,7 @@ export default function UploadPage() {
     setTorrentImdbId(selectedTmdb.imdb_id || '');
     setTorrentLanguage(selectedTmdb.language || '');
     setTorrentSourceType(result.source_type || '');
+    setTorrentReleaseName(result.name || '');
     setHashInput(result.magnet || result.hash);
     setTorrentSearchResults([]);
     setAllTorrentResults([]);
@@ -1422,6 +1447,61 @@ export default function UploadPage() {
                           <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
                         </button>
                       ))}
+                    </div>
+                  </div>
+
+                  {/* Subtitle languages */}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                      <Globe className="w-4 h-4 text-cinema-secondary" /> Subtitle Languages
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {/* English — locked */}
+                      <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">
+                        English
+                      </div>
+                      {/* Arabic — locked */}
+                      <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">
+                        Arabic
+                      </div>
+                      {/* Extra selected languages */}
+                      {subtitleLangs.filter((c) => c !== 'ar').map((code) => {
+                        const lang = ALL_SUBTITLE_LANGUAGES.find((l) => l.code === code);
+                        return (
+                          <div key={code} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-cinema-secondary/10 border border-cinema-secondary/20 text-xs text-cinema-secondary">
+                            {lang?.label || code}
+                            <button onClick={() => setSubtitleLangs((prev) => prev.filter((c2) => c2 !== code))} className="hover:text-cinema-error"><X className="w-3 h-3" /></button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Search to add more */}
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Add more languages..."
+                        value={subLangSearch}
+                        onChange={(e) => setSubLangSearch(e.target.value)}
+                        onFocus={() => setShowSubLangDropdown(true)}
+                        className="w-full rounded-lg bg-cinema-surface border border-cinema-border px-3 py-1.5 text-xs text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-secondary/50 transition-all"
+                      />
+                      {showSubLangDropdown && (
+                        <div className="absolute z-20 top-full left-0 right-0 mt-1 max-h-36 overflow-y-auto rounded-lg bg-cinema-card border border-cinema-border shadow-xl">
+                          {ALL_SUBTITLE_LANGUAGES
+                            .filter((l) => l.code !== 'en' && l.code !== 'ar' && !subtitleLangs.includes(l.code))
+                            .filter((l) => !subLangSearch || l.label.toLowerCase().includes(subLangSearch.toLowerCase()))
+                            .slice(0, 15)
+                            .map((l) => (
+                              <button key={l.code} onClick={() => {
+                                setSubtitleLangs((prev) => [...prev, l.code]);
+                                setSubLangSearch('');
+                                setShowSubLangDropdown(false);
+                              }} className="w-full text-left px-3 py-1.5 text-xs text-cinema-text-muted hover:bg-cinema-secondary/10 hover:text-cinema-secondary transition-colors">
+                                {l.label}
+                              </button>
+                            ))}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1839,6 +1919,18 @@ export default function UploadPage() {
                   className="w-full rounded-xl bg-cinema-card border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all resize-none" />
               </div>
 
+              {/* Tagline */}
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-cinema-text-muted">Tagline <span className="text-xs font-normal text-cinema-text-dim">(optional)</span></label>
+                <input
+                  type="text"
+                  placeholder="A short tagline or quote"
+                  value={torrentTagline}
+                  onChange={(e) => setTorrentTagline(e.target.value)}
+                  className="w-full rounded-xl bg-cinema-card border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                />
+              </div>
+
               {/* Quality */}
               <div className="space-y-2">
                 <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
@@ -1997,64 +2089,54 @@ export default function UploadPage() {
               )}
             </div>
 
-            {/* Auto-download subtitles language preference */}
-            {torrentImdbId && (
-              <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-accent/20 rounded-2xl p-6 space-y-4">
-                <div>
-                  <h3 className="font-display text-base font-semibold text-cinema-text flex items-center gap-2">
-                    <Download className="w-4 h-4 text-cinema-accent" /> Auto-Download Subtitles
-                  </h3>
-                  <p className="text-xs text-cinema-text-dim mt-0.5">We&apos;ll automatically search and download subtitles from OpenSubtitles when the movie finishes downloading</p>
-                </div>
-
-                <div className="space-y-3">
-                  {/* English — always included, locked */}
-                  <div className="flex items-center gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
-                    <div className="w-8 h-8 rounded-lg bg-cinema-accent/10 flex items-center justify-center flex-shrink-0">
-                      <Globe className="w-4 h-4 text-cinema-accent" />
+            {/* Subtitle languages (selected from search tab, editable here too) */}
+            <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-3">
+              <h3 className="font-display text-base font-semibold text-cinema-text flex items-center gap-2">
+                <Globe className="w-4 h-4 text-cinema-secondary" /> Auto-Download Subtitles
+              </h3>
+              <p className="text-xs text-cinema-text-dim">Subtitles will be fetched automatically after the movie downloads.</p>
+              <div className="flex flex-wrap gap-1.5">
+                <div className="px-2.5 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">English</div>
+                <div className="px-2.5 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">Arabic</div>
+                {subtitleLangs.filter((c) => c !== 'ar').map((code) => {
+                  const lang = ALL_SUBTITLE_LANGUAGES.find((l) => l.code === code);
+                  return (
+                    <div key={code} className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cinema-secondary/10 border border-cinema-secondary/20 text-xs text-cinema-secondary">
+                      {lang?.label || code}
+                      <button onClick={() => setSubtitleLangs((prev) => prev.filter((c2) => c2 !== code))} className="hover:text-cinema-error"><X className="w-3 h-3" /></button>
                     </div>
-                    <span className="flex-1 text-sm font-medium text-cinema-text">English</span>
-                    <span className="text-xs text-cinema-accent px-2 py-0.5 rounded bg-cinema-accent/10">Default</span>
-                  </div>
-
-                  {/* Second language — user picks */}
-                  <div className="flex items-center gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
-                    <div className="w-8 h-8 rounded-lg bg-cinema-secondary/10 flex items-center justify-center flex-shrink-0">
-                      <Globe className="w-4 h-4 text-cinema-secondary" />
-                    </div>
-                    <span className="flex-1 text-sm text-cinema-text-muted">Second language</span>
-                    <select
-                      value={subtitleSecondLang}
-                      onChange={async (e) => {
-                        const lang = e.target.value;
-                        setSubtitleSecondLang(lang);
-                        // Save preference to profile
-                        const { data: { user } } = await supabase.auth.getUser();
-                        if (user) {
-                          const langs = lang ? ['en', lang] : ['en'];
-                          await supabase
-                            .from('profiles')
-                            .update({ subtitle_languages: langs })
-                            .eq('user_id', user.id);
-                          setSubtitleLangSaved(true);
-                          setTimeout(() => setSubtitleLangSaved(false), 2000);
-                        }
-                      }}
-                      className="text-xs rounded-lg bg-cinema-card border border-cinema-border px-2 py-1.5 text-cinema-text focus:outline-none cursor-pointer"
-                    >
-                      <option value="">None</option>
-                      {LANGUAGE_OPTIONS.filter((l) => l.code !== 'en').map((l) => (
-                        <option key={l.code} value={l.code}>{l.label}</option>
-                      ))}
-                    </select>
-                    {subtitleLangSaved && (
-                      <span className="text-[10px] text-cinema-success animate-fade-in">Saved!</span>
-                    )}
-                  </div>
-                </div>
-                <p className="text-[11px] text-cinema-text-dim">Your language preference is saved for future downloads.</p>
+                  );
+                })}
               </div>
-            )}
+              {/* Quick add */}
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Add more languages..."
+                  value={subLangSearch}
+                  onChange={(e) => setSubLangSearch(e.target.value)}
+                  onFocus={() => setShowSubLangDropdown(true)}
+                  className="w-full rounded-lg bg-cinema-surface border border-cinema-border px-3 py-1.5 text-xs text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-secondary/50 transition-all"
+                />
+                {showSubLangDropdown && (
+                  <div className="absolute z-20 top-full left-0 right-0 mt-1 max-h-36 overflow-y-auto rounded-lg bg-cinema-card border border-cinema-border shadow-xl">
+                    {ALL_SUBTITLE_LANGUAGES
+                      .filter((l) => l.code !== 'en' && l.code !== 'ar' && !subtitleLangs.includes(l.code))
+                      .filter((l) => !subLangSearch || l.label.toLowerCase().includes(subLangSearch.toLowerCase()))
+                      .slice(0, 15)
+                      .map((l) => (
+                        <button key={l.code} onClick={() => {
+                          setSubtitleLangs((prev) => [...prev, l.code]);
+                          setSubLangSearch('');
+                          setShowSubLangDropdown(false);
+                        }} className="w-full text-left px-3 py-1.5 text-xs text-cinema-text-muted hover:bg-cinema-secondary/10 hover:text-cinema-secondary transition-colors">
+                          {l.label}
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* How it works */}
             <div className="flex items-start gap-3 p-4 rounded-xl bg-cinema-secondary/8 border border-cinema-secondary/20">

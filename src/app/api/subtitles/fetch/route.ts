@@ -435,29 +435,34 @@ export async function POST(req: NextRequest) {
     // Get current movie
     const { data: movie } = await supabaseAdmin
       .from('movies')
-      .select('uploaded_by, subtitles, blob_name, title, imdb_id, tmdb_id')
+      .select('uploaded_by, subtitles, blob_name, title, imdb_id, tmdb_id, release_name, subtitle_options')
       .eq('id', movie_id)
       .single();
     if (!movie) return NextResponse.json({ error: 'Movie not found' }, { status: 404 });
 
     const existingSubtitles: { label: string; lang: string; url: string }[] = movie.subtitles || [];
+    const existingOptions: Record<string, any> = movie.subtitle_options || {};
+
     const existingLangs = new Set(existingSubtitles.map((s: any) => s.lang));
     const needed = languages.filter((l: string) => !existingLangs.has(l));
     if (needed.length === 0) {
-      return NextResponse.json({ message: 'All requested languages already have subtitles', subtitles: existingSubtitles });
+      return NextResponse.json({
+        message: 'All requested languages already have subtitles',
+        subtitles: existingSubtitles,
+        subtitle_options: existingOptions,
+      });
     }
 
     // Use best available identifiers
     const effectiveImdb = imdb_id || movie.imdb_id || null;
     const effectiveTmdb = tmdb_id || movie.tmdb_id || null;
     const effectiveQuery = query || movie.title || null;
-    const effectiveBlobName = blob_name || movie.blob_name || '';
+    const effectiveBlobName = blob_name || movie.release_name || movie.blob_name || '';
 
     if (!effectiveImdb && !effectiveTmdb && !effectiveQuery) {
       return NextResponse.json({ error: 'No identifiers available to search subtitles' }, { status: 400 });
     }
 
-    // Extract keywords from blob/torrent name for release matching
     const movieKeywords = extractReleaseKeywords(effectiveBlobName);
     console.log(`[subs] Searching for ${needed.join(',')} | IMDB=${effectiveImdb} TMDB=${effectiveTmdb} | keywords=${movieKeywords.slice(0, 8).join(',')}`);
 
@@ -472,23 +477,22 @@ export async function POST(req: NextRequest) {
       ...(yifyResults.status === 'fulfilled' ? yifyResults.value : []),
     ];
 
-    console.log(`[subs] Found ${allCandidates.length} candidates (subdl: ${subdlResults.status === 'fulfilled' ? subdlResults.value.length : 0}, yify: ${yifyResults.status === 'fulfilled' ? yifyResults.value.length : 0})`);
+    console.log(`[subs] Found ${allCandidates.length} candidates`);
 
-    // ── Pick best candidates per language (highest release match score) ──
-    // Keep top 3 per language so we can fallback if download/extraction fails
+    // ── Group and sort per language ──
     const candidatesPerLang = new Map<string, SubCandidate[]>();
     for (const c of allCandidates) {
       const list = candidatesPerLang.get(c.lang) || [];
       list.push(c);
       candidatesPerLang.set(c.lang, list);
     }
-    // Sort each language's candidates by score descending
     for (const [, list] of candidatesPerLang) {
       list.sort((a, b) => b.score - a.score);
     }
 
-    // ── Download and upload — try candidates in order until one works ──
+    // ── For each language: store all candidates, download ONLY the #1 best ──
     const newSubtitles = [...existingSubtitles];
+    const newOptions = { ...existingOptions };
     const downloaded: string[] = [];
     const failed: string[] = [];
 
@@ -496,27 +500,46 @@ export async function POST(req: NextRequest) {
       const candidates = candidatesPerLang.get(lang) || [];
       if (candidates.length === 0) { failed.push(lang); continue; }
 
-      let success = false;
-      for (const candidate of candidates.slice(0, 5)) { // try up to 5
+      // Store candidate metadata (no download yet)
+      const candidateMeta = candidates.slice(0, 10).map((c) => ({
+        source_url: c.download_url,
+        release_name: c.release_name,
+        score: c.score,
+        is_zip: c.is_zip,
+        source: c.source,
+      }));
+
+      // Download only the first (best) candidate
+      let downloadedFirst = false;
+      for (const candidate of candidates.slice(0, 3)) { // try top 3 in case first fails
         try {
-          console.log(`[subs] Trying ${lang} from ${candidate.source} (score=${candidate.score}, release=${candidate.release_name.slice(0, 60)})`);
-          const readUrl = await downloadAndUploadSub(candidate.download_url, movie.uploaded_by, lang, candidate.is_zip);
+          console.log(`[subs] Downloading ${lang} #1 from ${candidate.source} (score=${candidate.score}, release=${candidate.release_name.slice(0, 60)})`);
+          const readUrl = await downloadAndUploadSub(candidate.download_url, movie.uploaded_by, `${lang}-1`, candidate.is_zip);
           if (readUrl) {
             newSubtitles.push({ label: LANG_LABELS[lang] || lang, lang, url: readUrl });
+            newOptions[lang] = {
+              candidates: candidateMeta,
+              downloaded: [{ url: readUrl, release_name: candidate.release_name }],
+              active_index: 0,
+            };
             downloaded.push(lang);
-            success = true;
+            downloadedFirst = true;
+            console.log(`[subs] ${lang}: ${candidateMeta.length} candidates found, #1 downloaded and active`);
             break;
           }
         } catch (err) {
-          console.warn(`[subs] Candidate failed for ${lang}:`, (err as Error).message);
+          console.warn(`[subs] Download failed for ${lang}:`, (err as Error).message);
         }
       }
-      if (!success) failed.push(lang);
+      if (!downloadedFirst) failed.push(lang);
     }
 
     // ── Update movie ──
     if (downloaded.length > 0) {
-      await supabaseAdmin.from('movies').update({ subtitles: newSubtitles }).eq('id', movie_id);
+      await supabaseAdmin.from('movies').update({
+        subtitles: newSubtitles,
+        subtitle_options: newOptions,
+      }).eq('id', movie_id);
     }
 
     const noApiKey = !SUBDL_API_KEY;
@@ -524,6 +547,7 @@ export async function POST(req: NextRequest) {
       downloaded,
       failed: [...new Set(failed)],
       subtitles: downloaded.length > 0 ? newSubtitles : existingSubtitles,
+      subtitle_options: downloaded.length > 0 ? newOptions : existingOptions,
       no_api_key: noApiKey,
       message: noApiKey
         ? 'No SUBDL_API_KEY configured. Set it in your environment.'

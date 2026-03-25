@@ -73,6 +73,12 @@ export interface Movie {
   imdb_id: string | null;         // from TMDB
   original_language: string | null; // from TMDB
   source_type: string | null;     // e.g. 'BluRay', 'WEB-DL', 'WEBRip'
+  release_name: string | null;    // original torrent/release name for subtitle matching
+  subtitle_options: Record<string, {
+    candidates: { source_url: string; release_name: string; score: number; is_zip: boolean; source: string }[];
+    downloaded: { url: string; release_name: string }[];
+    active_index: number;
+  }> | null;
   // Ingest provenance
   ingest_method: IngestMethod;
   info_hash: string | null;       // null for direct uploads

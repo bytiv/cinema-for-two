@@ -34,6 +34,7 @@ export interface SaveIngestMovieParams {
   imdb_id?:           string | null;
   original_language?: string | null;
   source_type?:       string | null;
+  release_name?:      string | null;
 }
 
 export interface SaveIngestMovieResult {
@@ -80,7 +81,7 @@ export async function saveIngestMovie(
 ): Promise<SaveIngestMovieResult> {
   const { job, userId, title, description, posterUrl, quality, subtitles,
           tmdb_id, release_date, rating, genres, runtime,
-          tagline, imdb_id, original_language, source_type } = params;
+          tagline, imdb_id, original_language, source_type, release_name } = params;
 
   if (!job.blob_url) {
     throw new Error('Job is Ready but has no blob_url — cannot save movie');
@@ -148,6 +149,7 @@ export async function saveIngestMovie(
       imdb_id:            imdb_id ?? null,
       original_language:  original_language ?? null,
       source_type:        source_type ?? null,
+      release_name:       release_name ?? null,
     })
     .select('id, blob_url')
     .single();

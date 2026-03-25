@@ -231,7 +231,6 @@ function EditMovieModal({
           description: description.trim() || null,
           tagline: tagline.trim() || null,
           quality: quality || null,
-          duration: duration || null,
           release_date: releaseDate.trim() || null,
           rating: rating.trim() ? parseFloat(rating) : null,
           genres: genres.trim() ? genres.split(',').map((g) => g.trim()).filter(Boolean) : null,
@@ -431,9 +430,6 @@ function EditMovieModal({
             </div>
           </div>
 
-          {/* Duration */}
-          <DurationInput value={duration} onChange={setDuration} />
-
           {/* Existing Subtitles */}
           <div className="space-y-2">
             <label className="flex items-center justify-between text-sm font-medium text-cinema-text-muted">
@@ -530,6 +526,7 @@ export default function MovieDetailPage() {
   const [showSubtitlePanel, setShowSubtitlePanel] = useState(false);
   const [langSearch, setLangSearch] = useState('');
   const [showLangDropdown, setShowLangDropdown] = useState(false);
+  const [retryingSubLang, setRetryingSubLang] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -747,7 +744,11 @@ export default function MovieDetailPage() {
       if (res.ok) {
         setSubtitleFetchMsg(data.message || 'Done');
         if (data.subtitles) {
-          setMovie((prev) => prev ? { ...prev, subtitles: data.subtitles } : prev);
+          setMovie((prev) => prev ? {
+            ...prev,
+            subtitles: data.subtitles,
+            subtitle_options: data.subtitle_options || prev.subtitle_options,
+          } : prev);
         }
         // Save language preference
         if (currentUser) {
@@ -918,12 +919,61 @@ export default function MovieDetailPage() {
                 <HardDrive className="w-3.5 h-3.5" />
                 {formatFileSize(movie.file_size)}
               </div>
-              {movie.subtitles && movie.subtitles.length > 0 && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default">
-                  <Globe className="w-3.5 h-3.5" />
-                  {movie.subtitles.map((s) => s.label).join(', ')}
-                </div>
-              )}
+              {movie.subtitles && movie.subtitles.length > 0 && movie.subtitles.map((s) => {
+                const options = movie.subtitle_options?.[s.lang];
+                const totalCandidates = options?.candidates?.length || 0;
+                const activeIdx = options?.active_index ?? 0;
+                const downloadedCount = options?.downloaded?.filter(Boolean).length || 0;
+                const showCycle = canEdit && totalCandidates > 1;
+
+                return (
+                  <div key={s.lang} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 group/sub">
+                    <Globe className="w-3.5 h-3.5" />
+                    {s.label}
+                    {showCycle && (
+                      <span className="hidden group-hover/sub:inline-flex items-center gap-1 ml-0.5">
+                        <span className="text-[10px] text-cinema-text-dim">
+                          {activeIdx + 1}/{totalCandidates}
+                        </span>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (retryingSubLang) return;
+                            setRetryingSubLang(s.lang);
+                            try {
+                              const res = await fetch('/api/subtitles/cycle', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ movie_id: movie.id, lang: s.lang }),
+                              });
+                              const data = await res.json();
+                              if (res.ok) {
+                                setMovie((prev) => prev ? {
+                                  ...prev,
+                                  subtitles: data.subtitles,
+                                  subtitle_options: data.subtitle_options,
+                                } : prev);
+                                setSubtitleFetchMsg(data.message);
+                              } else {
+                                setSubtitleFetchMsg(data.error || 'No alternatives');
+                              }
+                            } catch {
+                              setSubtitleFetchMsg('Failed');
+                            } finally {
+                              setRetryingSubLang(null);
+                              setTimeout(() => setSubtitleFetchMsg(''), 3000);
+                            }
+                          }}
+                          title={`Cycle ${s.label} subtitle (${activeIdx + 1}/${totalCandidates}, ${downloadedCount} downloaded)`}
+                          className="text-cinema-text-dim hover:text-cinema-accent"
+                        >
+                          {retryingSubLang === s.lang ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Subtitle auto-download section */}
