@@ -9,7 +9,7 @@ import Button from '@/components/ui/Button';
 import Image from 'next/image';
 import AzurePosterImage from '@/components/movie/AzurePosterImage';
 import Link from 'next/link';
-import { Play, Users, Clock, HardDrive, Calendar, Trash2, ArrowLeft, History, RefreshCw, Pencil, X, Gauge, Globe, Plus, Save, AlertCircle, Image as ImageIcon, Upload, Star, Tag } from 'lucide-react';
+import { Play, Users, Clock, HardDrive, Calendar, Trash2, ArrowLeft, History, RefreshCw, Pencil, X, Gauge, Globe, Plus, Save, AlertCircle, Image as ImageIcon, Upload, Star, Tag, Disc, Download, Loader2 } from 'lucide-react';
 import { formatDuration, formatFileSize, formatRelativeTime } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '@/lib/utils';
@@ -38,6 +38,78 @@ const QUALITY_OPTIONS: { value: VideoQuality; label: string; desc: string }[] = 
   { value: '4K',    label: '4K',    desc: 'Ultra HD' },
 ];
 
+const ALL_LANGUAGES: { code: string; label: string }[] = [
+  { code: 'af', label: 'Afrikaans' },
+  { code: 'sq', label: 'Albanian' },
+  { code: 'am', label: 'Amharic' },
+  { code: 'ar', label: 'Arabic' },
+  { code: 'hy', label: 'Armenian' },
+  { code: 'az', label: 'Azerbaijani' },
+  { code: 'eu', label: 'Basque' },
+  { code: 'be', label: 'Belarusian' },
+  { code: 'bn', label: 'Bengali' },
+  { code: 'bs', label: 'Bosnian' },
+  { code: 'bg', label: 'Bulgarian' },
+  { code: 'my', label: 'Burmese' },
+  { code: 'ca', label: 'Catalan' },
+  { code: 'zh', label: 'Chinese' },
+  { code: 'hr', label: 'Croatian' },
+  { code: 'cs', label: 'Czech' },
+  { code: 'da', label: 'Danish' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'en', label: 'English' },
+  { code: 'et', label: 'Estonian' },
+  { code: 'fi', label: 'Finnish' },
+  { code: 'fr', label: 'French' },
+  { code: 'ka', label: 'Georgian' },
+  { code: 'de', label: 'German' },
+  { code: 'el', label: 'Greek' },
+  { code: 'gu', label: 'Gujarati' },
+  { code: 'he', label: 'Hebrew' },
+  { code: 'hi', label: 'Hindi' },
+  { code: 'hu', label: 'Hungarian' },
+  { code: 'is', label: 'Icelandic' },
+  { code: 'id', label: 'Indonesian' },
+  { code: 'it', label: 'Italian' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'kn', label: 'Kannada' },
+  { code: 'kk', label: 'Kazakh' },
+  { code: 'km', label: 'Khmer' },
+  { code: 'ko', label: 'Korean' },
+  { code: 'ku', label: 'Kurdish' },
+  { code: 'lv', label: 'Latvian' },
+  { code: 'lt', label: 'Lithuanian' },
+  { code: 'mk', label: 'Macedonian' },
+  { code: 'ms', label: 'Malay' },
+  { code: 'ml', label: 'Malayalam' },
+  { code: 'mn', label: 'Mongolian' },
+  { code: 'ne', label: 'Nepali' },
+  { code: 'no', label: 'Norwegian' },
+  { code: 'fa', label: 'Persian' },
+  { code: 'pl', label: 'Polish' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'pa', label: 'Punjabi' },
+  { code: 'ro', label: 'Romanian' },
+  { code: 'ru', label: 'Russian' },
+  { code: 'sr', label: 'Serbian' },
+  { code: 'si', label: 'Sinhala' },
+  { code: 'sk', label: 'Slovak' },
+  { code: 'sl', label: 'Slovenian' },
+  { code: 'so', label: 'Somali' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'sw', label: 'Swahili' },
+  { code: 'sv', label: 'Swedish' },
+  { code: 'tl', label: 'Tagalog' },
+  { code: 'ta', label: 'Tamil' },
+  { code: 'te', label: 'Telugu' },
+  { code: 'th', label: 'Thai' },
+  { code: 'tr', label: 'Turkish' },
+  { code: 'uk', label: 'Ukrainian' },
+  { code: 'ur', label: 'Urdu' },
+  { code: 'uz', label: 'Uzbek' },
+  { code: 'vi', label: 'Vietnamese' },
+];
+
 interface NewSubtitleEntry {
   id: string;
   file: File;
@@ -58,6 +130,7 @@ function EditMovieModal({
 }) {
   const [title, setTitle] = useState(movie.title);
   const [description, setDescription] = useState(movie.description ?? '');
+  const [tagline, setTagline] = useState(movie.tagline ?? '');
   const [quality, setQuality] = useState<VideoQuality | null>(movie.quality ?? null);
   const [duration, setDuration] = useState<number | null>(movie.duration ?? null);
   const [releaseDate, setReleaseDate] = useState(movie.release_date ?? '');
@@ -156,6 +229,7 @@ function EditMovieModal({
           id: movie.id,
           title: title.trim(),
           description: description.trim() || null,
+          tagline: tagline.trim() || null,
           quality: quality || null,
           duration: duration || null,
           release_date: releaseDate.trim() || null,
@@ -219,6 +293,18 @@ function EditMovieModal({
               rows={3}
               className="w-full rounded-xl bg-cinema-surface border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all resize-none"
               placeholder="What's this movie about?"
+            />
+          </div>
+
+          {/* Tagline */}
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-cinema-text-muted">Tagline</label>
+            <input
+              type="text"
+              value={tagline}
+              onChange={(e) => setTagline(e.target.value)}
+              className="w-full rounded-xl bg-cinema-surface border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+              placeholder="A short tagline or quote"
             />
           </div>
 
@@ -437,6 +523,14 @@ export default function MovieDetailPage() {
   const [activeRoom, setActiveRoom] = useState<WatchRoom | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
 
+  // Subtitle auto-fetch state
+  const [fetchingSubtitles, setFetchingSubtitles] = useState(false);
+  const [subtitleFetchMsg, setSubtitleFetchMsg] = useState('');
+  const [subtitleLangs, setSubtitleLangs] = useState<string[]>(['ar']);
+  const [showSubtitlePanel, setShowSubtitlePanel] = useState(false);
+  const [langSearch, setLangSearch] = useState('');
+  const [showLangDropdown, setShowLangDropdown] = useState(false);
+
   useEffect(() => {
     loadData();
   }, [movieId]);
@@ -581,7 +675,13 @@ export default function MovieDetailPage() {
         _probeMissingMeta(m.id, !m.duration, !m.file_size);
       }
     }
-    if (profileRes.data) setCurrentUser({ id: user.id, profile: profileRes.data });
+    if (profileRes.data) {
+      setCurrentUser({ id: user.id, profile: profileRes.data });
+      // Load subtitle language preference
+      const langs: string[] = (profileRes.data as any).subtitle_languages || ['en'];
+      const extraLangs = langs.filter((l: string) => l !== 'en');
+      if (extraLangs.length > 0) setSubtitleLangs(extraLangs);
+    }
     if (historyRes.data) setWatchHistory(historyRes.data);
     setLoading(false);
   }
@@ -623,6 +723,48 @@ export default function MovieDetailPage() {
       }
     } catch {}
     setTogglingPublic(false);
+  }
+
+  async function handleFetchSubtitles() {
+    if (!movie) return;
+    setFetchingSubtitles(true);
+    setSubtitleFetchMsg('');
+    try {
+      const langs = ['en', 'ar', ...subtitleLangs.filter((l) => l !== 'en' && l !== 'ar')];
+      const res = await fetch('/api/subtitles/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          movie_id: movie.id,
+          imdb_id: movie.imdb_id || undefined,
+          tmdb_id: movie.tmdb_id || undefined,
+          query: movie.title,
+          languages: langs,
+          blob_name: movie.blob_name || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSubtitleFetchMsg(data.message || 'Done');
+        if (data.subtitles) {
+          setMovie((prev) => prev ? { ...prev, subtitles: data.subtitles } : prev);
+        }
+        // Save language preference
+        if (currentUser) {
+          await supabase
+            .from('profiles')
+            .update({ subtitle_languages: langs })
+            .eq('user_id', currentUser.id);
+        }
+      } else {
+        setSubtitleFetchMsg(data.error || 'Failed to fetch subtitles');
+      }
+    } catch (err: any) {
+      setSubtitleFetchMsg(err.message || 'Failed');
+    } finally {
+      setFetchingSubtitles(false);
+      setTimeout(() => setSubtitleFetchMsg(''), 5000);
+    }
   }
 
   if (loading) return (
@@ -736,6 +878,9 @@ export default function MovieDetailPage() {
                 )}
               </div>
               {movie.description && <p className="text-cinema-text-muted leading-relaxed mt-3">{movie.description}</p>}
+              {movie.tagline && (
+                <p className="text-sm text-cinema-accent italic mt-2">{movie.tagline}</p>
+              )}
             </div>
 
             {/* Meta badges — only actual metadata, hover reactive */}
@@ -752,6 +897,23 @@ export default function MovieDetailPage() {
                   {movie.quality}
                 </div>
               )}
+              {(movie.source_type?.toLowerCase().includes('bluray') || movie.source_type?.toLowerCase().includes('blu-ray')) && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-sm text-blue-400 hover:border-blue-400/40 transition-all duration-200 cursor-default">
+                  <Disc className="w-3.5 h-3.5" />
+                  BluRay
+                </div>
+              )}
+              {movie.source_type && !(movie.source_type.toLowerCase().includes('bluray') || movie.source_type.toLowerCase().includes('blu-ray')) && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-accent transition-all duration-200 cursor-default">
+                  {movie.source_type}
+                </div>
+              )}
+              {movie.original_language && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default uppercase">
+                  <Globe className="w-3.5 h-3.5" />
+                  {movie.original_language}
+                </div>
+              )}
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default">
                 <HardDrive className="w-3.5 h-3.5" />
                 {formatFileSize(movie.file_size)}
@@ -763,6 +925,123 @@ export default function MovieDetailPage() {
                 </div>
               )}
             </div>
+
+            {/* Subtitle auto-download section */}
+            {canEdit && (
+              <div className="space-y-2">
+                {!showSubtitlePanel ? (
+                  <button
+                    onClick={() => setShowSubtitlePanel(true)}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cinema-card/50 border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-accent transition-all duration-200"
+                  >
+                    <Download className="w-4 h-4" />
+                    Add Subtitles
+                  </button>
+                ) : (
+                  <div className="p-4 rounded-xl bg-cinema-card/50 border border-cinema-accent/20 space-y-3 animate-fade-in">
+                    <div className="flex items-center justify-between">
+                      <h3 className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                        <Download className="w-4 h-4 text-cinema-accent" />
+                        Add Subtitles
+                      </h3>
+                      <button onClick={() => setShowSubtitlePanel(false)} className="text-cinema-text-dim hover:text-cinema-text transition-colors">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Selected language tags */}
+                    <div className="flex flex-wrap gap-2">
+                      {/* English — always there */}
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">
+                        <Globe className="w-3 h-3" />
+                        English
+                      </div>
+                      {/* Arabic — always there */}
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cinema-accent/10 border border-cinema-accent/20 text-xs text-cinema-accent">
+                        <Globe className="w-3 h-3" />
+                        Arabic
+                      </div>
+                      {subtitleLangs.filter((c) => c !== 'ar').map((code) => {
+                        const lang = ALL_LANGUAGES.find((l) => l.code === code);
+                        return (
+                          <div key={code} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cinema-secondary/10 border border-cinema-secondary/20 text-xs text-cinema-secondary">
+                            {lang?.label || code}
+                            <button
+                              onClick={() => setSubtitleLangs((prev) => prev.filter((c) => c !== code))}
+                              className="hover:text-cinema-error transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Searchable language dropdown */}
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Search languages..."
+                        value={langSearch}
+                        onChange={(e) => setLangSearch(e.target.value)}
+                        onFocus={() => setShowLangDropdown(true)}
+                        className="w-full rounded-lg bg-cinema-surface border border-cinema-border px-3 py-2 text-sm text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 transition-all"
+                      />
+                      {showLangDropdown && (
+                        <div className="absolute z-20 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-lg bg-cinema-card border border-cinema-border shadow-xl">
+                          {ALL_LANGUAGES
+                            .filter((l) => l.code !== 'en' && l.code !== 'ar' && !subtitleLangs.includes(l.code))
+                            .filter((l) => !langSearch || l.label.toLowerCase().includes(langSearch.toLowerCase()) || l.code.includes(langSearch.toLowerCase()))
+                            .slice(0, 20)
+                            .map((l) => (
+                              <button
+                                key={l.code}
+                                onClick={() => {
+                                  setSubtitleLangs((prev) => [...prev, l.code]);
+                                  setLangSearch('');
+                                  setShowLangDropdown(false);
+                                }}
+                                className="w-full text-left px-3 py-2 text-sm text-cinema-text-muted hover:bg-cinema-accent/10 hover:text-cinema-accent transition-colors"
+                              >
+                                {l.label} <span className="text-cinema-text-dim text-xs ml-1">({l.code})</span>
+                              </button>
+                            ))}
+                          {ALL_LANGUAGES.filter((l) => l.code !== 'en' && l.code !== 'ar' && !subtitleLangs.includes(l.code)).filter((l) => !langSearch || l.label.toLowerCase().includes(langSearch.toLowerCase())).length === 0 && (
+                            <div className="px-3 py-2 text-sm text-cinema-text-dim">No languages found</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <Button
+                        size="sm"
+                        icon={fetchingSubtitles ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                        onClick={() => { setShowLangDropdown(false); handleFetchSubtitles(); }}
+                        loading={fetchingSubtitles}
+                      >
+                        {fetchingSubtitles ? 'Searching...' : 'Fetch Subtitles'}
+                      </Button>
+                      {subtitleFetchMsg && (
+                        <p className={cn(
+                          'text-xs',
+                          subtitleFetchMsg.includes('Downloaded') || subtitleFetchMsg.includes('already')
+                            ? 'text-cinema-success'
+                            : subtitleFetchMsg.includes('No subtitle') || subtitleFetchMsg.includes('No API')
+                              ? 'text-cinema-warm'
+                              : 'text-cinema-error',
+                        )}>
+                          {subtitleFetchMsg}
+                        </p>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-cinema-text-dim">
+                      Select languages and click Fetch. Your preferences are saved for next time.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Uploader + Added date — plain text */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-cinema-text-dim">

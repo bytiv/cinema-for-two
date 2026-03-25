@@ -50,9 +50,8 @@ export default function MovieCard({ movie }: MovieCardProps) {
           </div>
         )}
 
-
-        {/* Hover overlay — fades in on hover with all details */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 ease-in-out flex flex-col justify-end p-3.5">
+        {/* Hover overlay — only shows on devices with hover (desktop) */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-all duration-300 ease-in-out hidden sm:flex flex-col justify-end p-3.5">
 
           {/* Title */}
           <h3 className="font-display text-[15px] font-semibold text-cinema-accent leading-snug line-clamp-2 drop-shadow-md">
@@ -99,11 +98,11 @@ export default function MovieCard({ movie }: MovieCardProps) {
           </div>
         </div>
 
-        {/* Static bottom scrim — visible when NOT hovering */}
-        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none group-hover:opacity-0 transition-opacity duration-300" />
+        {/* Static bottom scrim — visible when NOT hovering (on desktop it hides on hover) */}
+        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none sm:group-hover:opacity-0 transition-opacity duration-300" />
 
-        {/* Static title + year — visible when NOT hovering */}
-        <div className="absolute inset-x-0 bottom-0 p-3 pointer-events-none group-hover:opacity-0 transition-opacity duration-300">
+        {/* Static title + year — visible when NOT hovering (on desktop it hides on hover) */}
+        <div className="absolute inset-x-0 bottom-0 p-3 pointer-events-none sm:group-hover:opacity-0 transition-opacity duration-300">
           <h3 className="font-display text-sm font-semibold text-white leading-snug line-clamp-2 drop-shadow-md">
             {movie.title}
           </h3>

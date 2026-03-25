@@ -11,6 +11,7 @@ export interface Profile {
   hide_online_status: boolean;
   postcards_disabled: boolean;
   can_upload_torrent: boolean;
+  subtitle_languages: string[];   // preferred subtitle language codes, e.g. ['en', 'ar']
   created_at: string;
   updated_at: string;
 }
@@ -68,6 +69,10 @@ export interface Movie {
   rating: number | null;
   genres: string[] | null;
   runtime: number | null;         // minutes (from TMDB)
+  tagline: string | null;         // from TMDB
+  imdb_id: string | null;         // from TMDB
+  original_language: string | null; // from TMDB
+  source_type: string | null;     // e.g. 'BluRay', 'WEB-DL', 'WEBRip'
   // Ingest provenance
   ingest_method: IngestMethod;
   info_hash: string | null;       // null for direct uploads

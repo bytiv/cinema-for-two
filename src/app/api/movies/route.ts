@@ -76,7 +76,7 @@ export async function PATCH(request: Request) {
     }
 
     // Only allow editing safe fields — never blob_url, blob_name, uploaded_by
-    const allowed = ['title', 'description', 'quality', 'duration', 'subtitles', 'poster_url', 'tmdb_id', 'release_date', 'rating', 'genres', 'runtime'];
+    const allowed = ['title', 'description', 'quality', 'duration', 'subtitles', 'poster_url', 'tmdb_id', 'release_date', 'rating', 'genres', 'runtime', 'tagline', 'source_type', 'imdb_id', 'original_language'];
     // Only admins can toggle public visibility
     if (admin) allowed.push('is_public');
     const patch: Record<string, unknown> = {};

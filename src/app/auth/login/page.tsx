@@ -72,7 +72,7 @@ function LoginForm() {
           </button>
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex justify-start">
           <Link
             href="/auth/forgot-password"
             className="text-sm text-cinema-accent hover:text-cinema-accent-light transition-colors"

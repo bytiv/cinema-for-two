@@ -386,6 +386,14 @@ export default function UploadPage() {
   const [torrentRating,        setTorrentRating]        = useState('');
   const [torrentGenres,        setTorrentGenres]        = useState('');
   const [torrentRuntime,       setTorrentRuntime]       = useState('');
+  const [torrentSourceType,    setTorrentSourceType]    = useState('');
+  const [torrentImdbId,        setTorrentImdbId]        = useState('');
+  const [torrentTagline,       setTorrentTagline]       = useState('');
+  const [torrentLanguage,      setTorrentLanguage]      = useState('');
+
+  // ── Subtitle language preference state ──────────────────────
+  const [subtitleSecondLang,   setSubtitleSecondLang]   = useState<string>('');
+  const [subtitleLangSaved,    setSubtitleLangSaved]    = useState(false);
 
   // ── TMDB search state ───────────────────────────────────────
   const [tmdbQuery,         setTmdbQuery]         = useState('');
@@ -421,6 +429,19 @@ export default function UploadPage() {
         .single();
       if (profile) {
         setCanTorrent(profile.role === 'admin' || profile.can_upload_torrent === true);
+      }
+
+      // Load subtitle language preference
+      const { data: fullProfile } = await supabase
+        .from('profiles')
+        .select('subtitle_languages')
+        .eq('user_id', user.id)
+        .single();
+      if (fullProfile?.subtitle_languages) {
+        const langs: string[] = fullProfile.subtitle_languages;
+        const secondLang = langs.find((l: string) => l !== 'en') || '';
+        setSubtitleSecondLang(secondLang);
+        if (secondLang) setSubtitleLangSaved(true);
       }
 
       const { data: rows } = await supabase
@@ -833,11 +854,17 @@ export default function UploadPage() {
               posterUrl,
               subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
               // TMDB / manual metadata
-              tmdb_id:      selectedTmdb?.tmdb_id ?? undefined,
-              release_date: torrentReleaseDate.trim() || undefined,
-              rating:       torrentRating.trim() ? parseFloat(torrentRating) : undefined,
-              genres:       torrentGenres.trim() ? torrentGenres.split(',').map((g) => g.trim()).filter(Boolean) : undefined,
-              runtime:      torrentRuntime.trim() ? parseInt(torrentRuntime, 10) : undefined,
+              tmdb_id:           selectedTmdb?.tmdb_id ?? undefined,
+              release_date:      torrentReleaseDate.trim() || undefined,
+              rating:            torrentRating.trim() ? parseFloat(torrentRating) : undefined,
+              genres:            torrentGenres.trim() ? torrentGenres.split(',').map((g) => g.trim()).filter(Boolean) : undefined,
+              runtime:           torrentRuntime.trim() ? parseInt(torrentRuntime, 10) : undefined,
+              tagline:           torrentTagline.trim() || undefined,
+              imdb_id:           torrentImdbId.trim() || undefined,
+              original_language: torrentLanguage.trim() || undefined,
+              source_type:       torrentSourceType.trim() || undefined,
+              // Subtitle language preference for auto-download
+              subtitle_languages: subtitleSecondLang ? ['en', subtitleSecondLang] : ['en'],
             },
           }),
         });
@@ -892,6 +919,10 @@ export default function UploadPage() {
       setTorrentRating('');
       setTorrentGenres('');
       setTorrentRuntime('');
+      setTorrentSourceType('');
+      setTorrentImdbId('');
+      setTorrentTagline('');
+      setTorrentLanguage('');
       setSelectedTmdb(null);
       setTmdbQuality(null);
       setSubmitPhase('done');
@@ -988,6 +1019,9 @@ export default function UploadPage() {
     setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
     setTorrentGenres(selectedTmdb.genres?.join(', ') || '');
     setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
+    setTorrentTagline(selectedTmdb.tagline || '');
+    setTorrentImdbId(selectedTmdb.imdb_id || '');
+    setTorrentLanguage(selectedTmdb.language || '');
     setTorrentSearchResults([]);
     setTab('torrent');
   };
@@ -1066,6 +1100,10 @@ export default function UploadPage() {
     setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
     setTorrentGenres(selectedTmdb.genres?.join(', ') || '');
     setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
+    setTorrentTagline(selectedTmdb.tagline || '');
+    setTorrentImdbId(selectedTmdb.imdb_id || '');
+    setTorrentLanguage(selectedTmdb.language || '');
+    setTorrentSourceType(result.source_type || '');
     setHashInput(result.magnet || result.hash);
     setTorrentSearchResults([]);
     setAllTorrentResults([]);
@@ -1958,6 +1996,65 @@ export default function UploadPage() {
                 </div>
               )}
             </div>
+
+            {/* Auto-download subtitles language preference */}
+            {torrentImdbId && (
+              <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-accent/20 rounded-2xl p-6 space-y-4">
+                <div>
+                  <h3 className="font-display text-base font-semibold text-cinema-text flex items-center gap-2">
+                    <Download className="w-4 h-4 text-cinema-accent" /> Auto-Download Subtitles
+                  </h3>
+                  <p className="text-xs text-cinema-text-dim mt-0.5">We&apos;ll automatically search and download subtitles from OpenSubtitles when the movie finishes downloading</p>
+                </div>
+
+                <div className="space-y-3">
+                  {/* English — always included, locked */}
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
+                    <div className="w-8 h-8 rounded-lg bg-cinema-accent/10 flex items-center justify-center flex-shrink-0">
+                      <Globe className="w-4 h-4 text-cinema-accent" />
+                    </div>
+                    <span className="flex-1 text-sm font-medium text-cinema-text">English</span>
+                    <span className="text-xs text-cinema-accent px-2 py-0.5 rounded bg-cinema-accent/10">Default</span>
+                  </div>
+
+                  {/* Second language — user picks */}
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-cinema-surface border border-cinema-border">
+                    <div className="w-8 h-8 rounded-lg bg-cinema-secondary/10 flex items-center justify-center flex-shrink-0">
+                      <Globe className="w-4 h-4 text-cinema-secondary" />
+                    </div>
+                    <span className="flex-1 text-sm text-cinema-text-muted">Second language</span>
+                    <select
+                      value={subtitleSecondLang}
+                      onChange={async (e) => {
+                        const lang = e.target.value;
+                        setSubtitleSecondLang(lang);
+                        // Save preference to profile
+                        const { data: { user } } = await supabase.auth.getUser();
+                        if (user) {
+                          const langs = lang ? ['en', lang] : ['en'];
+                          await supabase
+                            .from('profiles')
+                            .update({ subtitle_languages: langs })
+                            .eq('user_id', user.id);
+                          setSubtitleLangSaved(true);
+                          setTimeout(() => setSubtitleLangSaved(false), 2000);
+                        }
+                      }}
+                      className="text-xs rounded-lg bg-cinema-card border border-cinema-border px-2 py-1.5 text-cinema-text focus:outline-none cursor-pointer"
+                    >
+                      <option value="">None</option>
+                      {LANGUAGE_OPTIONS.filter((l) => l.code !== 'en').map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
+                    {subtitleLangSaved && (
+                      <span className="text-[10px] text-cinema-success animate-fade-in">Saved!</span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[11px] text-cinema-text-dim">Your language preference is saved for future downloads.</p>
+              </div>
+            )}
 
             {/* How it works */}
             <div className="flex items-start gap-3 p-4 rounded-xl bg-cinema-secondary/8 border border-cinema-secondary/20">
