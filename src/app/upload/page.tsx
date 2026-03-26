@@ -518,25 +518,6 @@ export default function UploadPage() {
   const [multiQualityPicks, setMultiQualityPicks] = useState<Record<string, TorrentSearchResult>>({});
   // e.g. { '720p': TorrentSearchResult, '1080p': TorrentSearchResult }
 
-  /** Toggle multi-quality — auto-picks best 720p + 1080p from visible results when turning ON */
-  const toggleMultiQuality = useCallback(() => {
-    setMultiQualityEnabled(prev => {
-      const next = !prev;
-      if (next && allTorrentResults.length > 0) {
-        // Auto-pick best 720p and 1080p from current results
-        const best720 = _findBestForQuality(allTorrentResults, '720p');
-        const best1080 = _findBestForQuality(allTorrentResults, '1080p');
-        const picks: Record<string, TorrentSearchResult> = {};
-        if (best720) picks['720p'] = best720;
-        if (best1080) picks['1080p'] = best1080;
-        setMultiQualityPicks(picks);
-      } else {
-        setMultiQualityPicks({});
-      }
-      return next;
-    });
-  }, [allTorrentResults]);
-
   // ── Subtitle language preference state ──────────────────────
   const [subtitleLangs,        setSubtitleLangs]        = useState<string[]>(['ar']);
   const [subLangSearch,        setSubLangSearch]        = useState('');
@@ -565,6 +546,24 @@ export default function UploadPage() {
   const [torrentSearchResults, setTorrentSearchResults] = useState<TorrentSearchResult[]>([]);
   const [torrentSearching,     setTorrentSearching]     = useState(false);
   const [torrentSearchError,   setTorrentSearchError]   = useState('');
+
+  /** Toggle multi-quality — auto-picks best 720p + 1080p from visible results when turning ON */
+  const toggleMultiQuality = useCallback(() => {
+    setMultiQualityEnabled(prev => {
+      const next = !prev;
+      if (next && allTorrentResults.length > 0) {
+        const best720 = _findBestForQuality(allTorrentResults, '720p');
+        const best1080 = _findBestForQuality(allTorrentResults, '1080p');
+        const picks: Record<string, TorrentSearchResult> = {};
+        if (best720) picks['720p'] = best720;
+        if (best1080) picks['1080p'] = best1080;
+        setMultiQualityPicks(picks);
+      } else {
+        setMultiQualityPicks({});
+      }
+      return next;
+    });
+  }, [allTorrentResults]);
 
   // ── Active jobs state ──────────────────────────────────────
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
