@@ -133,6 +133,13 @@ interface ActiveJob {
 const TERMINAL = new Set(['Ready', 'Failed', 'Cancelled']);
 const QUALITY_ORDER: Record<string, number> = { '480p': 0, '720p': 1, '1080p': 2, '4K': 3 };
 
+/** Find the best (highest seeders) torrent for a given quality from results */
+function _findBestForQuality(results: TorrentSearchResult[], quality: string): TorrentSearchResult | null {
+  return results
+    .filter(r => r.quality === quality && r.size_bytes <= (parseFloat(process.env.NEXT_PUBLIC_MAX_MOVIE_SIZE_GB || '7') * 1024 * 1024 * 1024))
+    .sort((a, b) => b.seeders - a.seeders)[0] || null;
+}
+
 function stageColor(stage: string) {
   if (stage === 'Ready')                    return 'text-cinema-success bg-cinema-success/10 border-cinema-success/20';
   if (stage === 'Failed')                   return 'text-cinema-error bg-cinema-error/10 border-cinema-error/20';
@@ -511,6 +518,25 @@ export default function UploadPage() {
   const [multiQualityPicks, setMultiQualityPicks] = useState<Record<string, TorrentSearchResult>>({});
   // e.g. { '720p': TorrentSearchResult, '1080p': TorrentSearchResult }
 
+  /** Toggle multi-quality — auto-picks best 720p + 1080p from visible results when turning ON */
+  const toggleMultiQuality = useCallback(() => {
+    setMultiQualityEnabled(prev => {
+      const next = !prev;
+      if (next && allTorrentResults.length > 0) {
+        // Auto-pick best 720p and 1080p from current results
+        const best720 = _findBestForQuality(allTorrentResults, '720p');
+        const best1080 = _findBestForQuality(allTorrentResults, '1080p');
+        const picks: Record<string, TorrentSearchResult> = {};
+        if (best720) picks['720p'] = best720;
+        if (best1080) picks['1080p'] = best1080;
+        setMultiQualityPicks(picks);
+      } else {
+        setMultiQualityPicks({});
+      }
+      return next;
+    });
+  }, [allTorrentResults]);
+
   // ── Subtitle language preference state ──────────────────────
   const [subtitleLangs,        setSubtitleLangs]        = useState<string[]>(['ar']);
   const [subLangSearch,        setSubLangSearch]        = useState('');
@@ -865,25 +891,53 @@ export default function UploadPage() {
   // ─────────────────────────────────────────────────────────
   const _handleMultiQualityProceed = () => {
     const picks = Object.entries(multiQualityPicks);
-    if (picks.length !== 2 || !selectedTmdb) return;
+    if (picks.length !== 2 || (!selectedTmdb && !selectedTV)) return;
 
     // Sort so we know which is first/second
     const sorted = picks.sort(([a], [b]) => (QUALITY_ORDER[b] ?? 0) - (QUALITY_ORDER[a] ?? 0));
     const [highQ, highResult] = sorted[0]; // e.g. '1080p'
     const [lowQ, lowResult]   = sorted[1]; // e.g. '720p'
 
-    // Pre-fill the torrent tab with TMDB metadata + first pick as primary hash
-    setTorrentTitle(selectedTmdb.title);
-    setTorrentDesc(selectedTmdb.overview || '');
-    if (selectedTmdb.poster_url) setTorrentPosterPreview(selectedTmdb.poster_url);
-    setTorrentQuality(null); // multi-quality — individual qualities handled separately
-    setTorrentReleaseDate(selectedTmdb.release_date || '');
-    setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
-    setTorrentGenres(selectedTmdb.genres?.join(', ') || '');
-    setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
-    setTorrentTagline(selectedTmdb.tagline || '');
-    setTorrentImdbId(selectedTmdb.imdb_id || '');
-    setTorrentLanguage(selectedTmdb.language || '');
+    if (selectedTV && selectedEpisode) {
+      // ── TV episode path ─────────────────────────────────────
+      const sNum = String(selectedEpisode.season_number).padStart(2, '0');
+      const eNum = String(selectedEpisode.episode_number).padStart(2, '0');
+      const episodeTitle = `${selectedTV.title} S${sNum}E${eNum} - ${selectedEpisode.name}`;
+
+      setTorrentTitle(episodeTitle);
+      setTorrentDesc(selectedEpisode.overview || selectedTV.overview || '');
+      if (selectedTV.poster_url) setTorrentPosterPreview(selectedTV.poster_url);
+      setTorrentQuality(null);
+      setTorrentReleaseDate(selectedEpisode.air_date || '');
+      setTorrentRating(selectedTV.rating ? String(selectedTV.rating) : '');
+      setTorrentGenres(selectedTV.genres?.join(', ') || '');
+      setTorrentRuntime(selectedEpisode.runtime ? String(selectedEpisode.runtime) : '');
+      setTorrentTagline(selectedTV.tagline || '');
+      setTorrentImdbId((selectedTV as any).imdb_id || '');
+      setTorrentLanguage(selectedTV.language || '');
+      setTorrentSeriesName(selectedTV.title);
+      setTorrentSeasonNum(selectedEpisode.season_number);
+      setTorrentEpisodeNum(selectedEpisode.episode_number);
+      setTorrentEpisodeTitle(selectedEpisode.name);
+    } else if (selectedTmdb) {
+      // ── Movie path ──────────────────────────────────────────
+      setTorrentTitle(selectedTmdb.title);
+      setTorrentDesc(selectedTmdb.overview || '');
+      if (selectedTmdb.poster_url) setTorrentPosterPreview(selectedTmdb.poster_url);
+      setTorrentQuality(null);
+      setTorrentReleaseDate(selectedTmdb.release_date || '');
+      setTorrentRating(selectedTmdb.rating ? String(selectedTmdb.rating) : '');
+      setTorrentGenres(selectedTmdb.genres?.join(', ') || '');
+      setTorrentRuntime(selectedTmdb.runtime ? String(selectedTmdb.runtime) : '');
+      setTorrentTagline(selectedTmdb.tagline || '');
+      setTorrentImdbId(selectedTmdb.imdb_id || '');
+      setTorrentLanguage(selectedTmdb.language || '');
+      setTorrentSeriesName('');
+      setTorrentSeasonNum(null);
+      setTorrentEpisodeNum(null);
+      setTorrentEpisodeTitle('');
+    }
+
     setTorrentSourceType(highResult.source_type || '');
     setTorrentReleaseName(highResult.name || '');
 
@@ -1460,6 +1514,27 @@ export default function UploadPage() {
       alert(`This torrent is ${result.size} which exceeds the ${maxGB} GB limit.`);
       return;
     }
+
+    // ── Multi-quality mode: auto-assign by quality tag ──────
+    if (multiQualityEnabled) {
+      const detectedQuality = result.quality;
+      if (!detectedQuality) {
+        alert('This torrent has no quality tag — cannot auto-assign. Pick torrents that have a quality label (720p, 1080p, etc.).');
+        return;
+      }
+      if (multiQualityPicks[detectedQuality]) {
+        alert(`You already picked a ${detectedQuality} torrent. Remove it first or pick a different quality.`);
+        return;
+      }
+      if (Object.keys(multiQualityPicks).length >= 2) {
+        alert('You already have two picks. Remove one to pick a different torrent.');
+        return;
+      }
+      setMultiQualityPicks(prev => ({ ...prev, [detectedQuality]: result }));
+      return;
+    }
+
+    // ── Single-quality mode: original behavior ──────────────
     const sNum = String(selectedEpisode.season_number).padStart(2, '0');
     const eNum = String(selectedEpisode.episode_number).padStart(2, '0');
     const episodeTitle = `${selectedTV.title} S${sNum}E${eNum} - ${selectedEpisode.name}`;
@@ -1977,7 +2052,7 @@ export default function UploadPage() {
                         <p className="text-xs font-medium text-cinema-text">Multiple Qualities</p>
                         <p className="text-[10px] text-cinema-text-dim mt-0.5">Pick two torrents with different qualities</p>
                       </div>
-                      <button type="button" onClick={() => { setMultiQualityEnabled(v => !v); setMultiQualityPicks({}); }}
+                      <button type="button" onClick={toggleMultiQuality}
                         className={cn('relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200',
                           multiQualityEnabled ? 'bg-cinema-accent' : 'bg-cinema-border')}>
                         <span className={cn('pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200',
@@ -2344,6 +2419,67 @@ export default function UploadPage() {
                         </div>
                       </div>
 
+                      {/* ── Multi-Quality & HLS Toggles (TV) ── */}
+                      <div className="space-y-3 pt-2 border-t border-cinema-border/30">
+                        <p className="text-[10px] text-cinema-text-dim uppercase tracking-wider font-medium">Advanced</p>
+                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-cinema-surface/50 border border-cinema-border">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-cinema-text">Multiple Qualities</p>
+                            <p className="text-[10px] text-cinema-text-dim mt-0.5">Pick two torrents with different qualities</p>
+                          </div>
+                          <button type="button" onClick={toggleMultiQuality}
+                            className={cn('relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200',
+                              multiQualityEnabled ? 'bg-cinema-accent' : 'bg-cinema-border')}>
+                            <span className={cn('pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200',
+                              multiQualityEnabled ? 'translate-x-4' : 'translate-x-0')} />
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-cinema-surface/50 border border-cinema-border">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-cinema-text flex items-center gap-1.5">
+                              HLS Streaming <Radio className="w-3 h-3 text-cinema-secondary" />
+                            </p>
+                            <p className="text-[10px] text-cinema-text-dim mt-0.5">
+                              {multiQualityEnabled ? 'Seamless auto quality switching' : 'Smoother chunked playback'}
+                            </p>
+                          </div>
+                          <button type="button" onClick={() => setHlsEnabled(v => !v)}
+                            className={cn('relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200',
+                              hlsEnabled ? 'bg-cinema-secondary' : 'bg-cinema-border')}>
+                            <span className={cn('pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200',
+                              hlsEnabled ? 'translate-x-4' : 'translate-x-0')} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Multi-quality picks summary (TV) */}
+                      {multiQualityEnabled && Object.keys(multiQualityPicks).length > 0 && (
+                        <div className="space-y-2 pt-2 animate-fade-in">
+                          <p className="text-[10px] text-cinema-text-dim uppercase tracking-wider font-medium">Selected Torrents</p>
+                          {Object.entries(multiQualityPicks).sort(([a], [b]) => (QUALITY_ORDER[a] ?? 0) - (QUALITY_ORDER[b] ?? 0)).map(([q, r]) => (
+                            <div key={q} className="flex items-center gap-2 p-2.5 rounded-xl bg-cinema-surface border border-cinema-border">
+                              <span className="px-2 py-0.5 rounded-md bg-cinema-accent/10 text-[11px] text-cinema-accent font-bold flex-shrink-0">{q}</span>
+                              <p className="text-xs text-cinema-text truncate flex-1">{r.name}</p>
+                              <span className="text-[10px] text-cinema-text-dim flex-shrink-0">{r.size}</span>
+                              <button onClick={() => setMultiQualityPicks(prev => { const next = { ...prev }; delete next[q]; return next; })}
+                                className="text-cinema-text-dim hover:text-cinema-error transition-colors flex-shrink-0">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                          {Object.keys(multiQualityPicks).length === 2 && (
+                            <Button onClick={() => _handleMultiQualityProceed()} size="lg" className="w-full mt-2" icon={<Download className="w-4 h-4" />}>
+                              Proceed with both downloads
+                            </Button>
+                          )}
+                          {Object.keys(multiQualityPicks).length === 1 && (
+                            <p className="text-xs text-cinema-warm text-center py-1">
+                              Pick one more torrent with a different quality
+                            </p>
+                          )}
+                        </div>
+                      )}
+
                       {/* Two paths */}
                       <div className="grid grid-cols-2 gap-3">
                         <Button onClick={handleTVSearchSources} size="lg" className="w-full"
@@ -2419,9 +2555,18 @@ export default function UploadPage() {
                             </div>
                             {isOversized ? (
                               <span className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-error/5 text-cinema-error/50 border border-cinema-error/10 cursor-not-allowed">Exceeds limit</span>
+                            ) : multiQualityEnabled && r.quality && multiQualityPicks[r.quality]?.hash === r.hash ? (
+                              <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-success/10 text-cinema-success border border-cinema-success/20 mt-0.5">
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                Picked
+                              </span>
+                            ) : multiQualityEnabled && !r.quality ? (
+                              <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-surface text-cinema-text-dim border border-cinema-border mt-0.5 cursor-not-allowed">
+                                No quality tag
+                              </span>
                             ) : (
                               <button onClick={() => handlePickTorrentResult(r)} className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-accent/10 text-cinema-accent border border-cinema-accent/20 hover:bg-cinema-accent/20 transition-all mt-0.5">
-                                <Download className="w-3.5 h-3.5" /> Select
+                                <Download className="w-3.5 h-3.5" /> {multiQualityEnabled ? `Pick ${r.quality || ''}` : 'Select'}
                               </button>
                             )}
                           </div>
@@ -2946,7 +3091,7 @@ export default function UploadPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setMultiQualityEnabled(v => !v)}
+                  onClick={toggleMultiQuality}
                   className={cn(
                     'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
                     multiQualityEnabled ? 'bg-cinema-accent' : 'bg-cinema-border',
