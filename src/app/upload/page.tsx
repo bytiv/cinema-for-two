@@ -697,7 +697,7 @@ export default function UploadPage() {
 
         // Got a real status from the Python container
         consecutiveErrors = 0;
-        const job: TorrentJob & { movie_id?: string } = data;
+        const job: TorrentJob & { movie_id?: string; ingest_group_id?: string; assigned_quality?: string; hls_playlist?: string } = data;
 
         setActiveJobs((prev) =>
           prev.map((aj) =>
@@ -711,6 +711,11 @@ export default function UploadPage() {
           clearInterval(pollIntervals.current[jobId]);
           delete pollIntervals.current[jobId];
           setTab('jobs');
+
+          // ── Grouped job: call finalize ──
+          if (job.stage === 'Ready' && job.ingest_group_id && job.blob_url) {
+            _tryFinalizeGroup(jobId, job.ingest_group_id, job.blob_url, job.assigned_quality, job.hls_playlist);
+          }
         }
       } catch {
         consecutiveErrors++;
@@ -782,6 +787,70 @@ export default function UploadPage() {
     }
   }
 
+  // ─────────────────────────────────────────────────────────
+  // Grouped job finalize — called when a grouped job hits Ready
+  // ─────────────────────────────────────────────────────────
+  async function _tryFinalizeGroup(
+    jobId: string,
+    groupId: string,
+    blobUrl: string,
+    assignedQuality?: string,
+    hlsPlaylist?: string,
+    streamMeta?: ActiveJob['streamMeta'],
+  ) {
+    try {
+      const res = await fetch('/api/ingest/finalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          job_id:           jobId,
+          blob_url:         blobUrl,
+          title:            streamMeta?.description ? '' : 'Untitled', // title comes from metadata
+          ingest_group_id:  groupId,
+          assigned_quality: assignedQuality,
+          hls_playlist:     hlsPlaylist,
+          // Pass minimal required fields — the finalize endpoint reads the rest from job metadata
+          ...(() => {
+            // We need to get the title from the active job
+            const aj = activeJobs.find(j => j.jobId === jobId);
+            const titleClean = aj?.title?.replace(/\s*\[.*\]$/, '') || 'Untitled';
+            return { title: titleClean };
+          })(),
+        }),
+      });
+
+      if (!res.ok) {
+        console.error('[finalize-group] failed:', await res.text());
+        return;
+      }
+
+      const data = await res.json();
+
+      if (data.waiting) {
+        // Not all jobs done yet — finalize will be called again when the next job finishes
+        console.log(`[finalize-group] Waiting: ${data.completed}/${data.total} jobs complete`);
+        return;
+      }
+
+      if (data.movie_id) {
+        // All jobs done, movie created! Update all jobs in this group with the movie ID
+        console.log(`[finalize-group] Movie created: ${data.movie_id}`);
+        setActiveJobs((prev) =>
+          prev.map((aj) => {
+            // Check if this job belongs to the same group by checking if its job has the same group ID
+            const jobData = aj.job as any;
+            if (jobData?.ingest_group_id === groupId || aj.jobId === jobId) {
+              return { ...aj, movieId: data.movie_id };
+            }
+            return aj;
+          }),
+        );
+      }
+    } catch (err) {
+      console.error('[finalize-group] error:', err);
+    }
+  }
+
   function _attachStream(
     jobId: string,
     title: string,
@@ -817,7 +886,7 @@ export default function UploadPage() {
           _stopPolling(jobId);
         }
 
-        const job: TorrentJob & { movie_id?: string } = parsed;
+        const job: TorrentJob & { movie_id?: string; ingest_group_id?: string; assigned_quality?: string; hls_playlist?: string } = parsed;
         setActiveJobs((prev) =>
           prev.map((aj) =>
             aj.jobId === jobId
@@ -830,6 +899,11 @@ export default function UploadPage() {
           delete esRefs.current[jobId];
           _stopPolling(jobId);
           setTab('jobs');
+
+          // ── Grouped job: call finalize when ALL in group are Ready ──
+          if (job.stage === 'Ready' && job.ingest_group_id && job.blob_url) {
+            _tryFinalizeGroup(jobId, job.ingest_group_id, job.blob_url, job.assigned_quality, job.hls_playlist, meta);
+          }
         }
       } catch {}
     };

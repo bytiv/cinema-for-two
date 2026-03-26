@@ -64,7 +64,7 @@ export async function GET(
   // Look up this job's container IP and HMAC secret
   const { data: jobRow } = await supabaseAdmin
     .from('ingest_jobs')
-    .select('user_id, hash, movie_name, metadata, status, container_ip, hmac_secret')
+    .select('user_id, hash, movie_name, metadata, status, container_ip, hmac_secret, ingest_group_id, assigned_quality, generate_hls')
     .eq('id', jobId)
     .single();
 
@@ -175,6 +175,25 @@ export async function GET(
             ) {
               movieSaved = true;
 
+              // ── Grouped multi-quality job: DON'T auto-save ──────
+              // The client will call /api/ingest/finalize when ALL jobs
+              // in the group are Ready. Just forward the event with
+              // group info so the client knows.
+              if (jobRow.ingest_group_id) {
+                const enriched = {
+                  ...job,
+                  ingest_group_id: jobRow.ingest_group_id,
+                  assigned_quality: jobRow.assigned_quality,
+                  hls_playlist: (job as any).hls_playlist || null,
+                };
+                // Sync status to completed
+                syncJobStatus(jobId, 'Ready');
+                push(`data: ${JSON.stringify(enriched)}\n\n`);
+                if (TERMINAL.has(job.stage)) { clearInterval(keepaliveInterval); close(); return; }
+                continue;
+              }
+
+              // ── Single (non-grouped) job: auto-save as before ───
               try {
                 const { saveIngestMovie } = await import('@/lib/save-ingest-movie');
                 const meta = jobRow.metadata ?? {};
@@ -205,8 +224,6 @@ export async function GET(
                 });
 
                 // ── Auto-download subtitles in the background ──────
-                // Fire-and-forget: call the subtitle fetch endpoint which handles
-                // searching, downloading, ASS conversion, and storing options.
                 const hasIdentifier = meta.imdb_id || meta.tmdb_id || jobRow.movie_name;
                 if (hasIdentifier && meta.subtitle_languages) {
                   (async () => {

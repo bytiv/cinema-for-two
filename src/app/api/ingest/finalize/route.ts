@@ -53,20 +53,23 @@ export async function POST(req: NextRequest) {
       ingest_group_id, assigned_quality, generate_hls, hls_playlist,
     } = body;
 
-    if (!job_id || !blob_url || !title) {
-      return NextResponse.json({ error: 'job_id, blob_url, and title are required' }, { status: 400 });
+    if (!job_id || !blob_url) {
+      return NextResponse.json({ error: 'job_id and blob_url are required' }, { status: 400 });
     }
 
     // Verify the job belongs to this user
     const { data: job } = await supabaseAdmin
       .from('ingest_jobs')
-      .select('user_id, hash, status, ingest_group_id, assigned_quality, generate_hls')
+      .select('user_id, hash, status, ingest_group_id, assigned_quality, generate_hls, movie_name, metadata')
       .eq('id', job_id)
       .single();
 
     if (!job || job.user_id !== user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+
+    // Use job's movie_name as fallback title
+    const effectiveTitle = title || job.movie_name || 'Untitled';
 
     const groupId = ingest_group_id || job.ingest_group_id;
 
@@ -186,7 +189,7 @@ export async function POST(req: NextRequest) {
       const { data: movie, error: movieError } = await supabaseAdmin
         .from('movies')
         .insert({
-          title:              (firstMeta.title || title).trim(),
+          title:              (firstMeta.title || effectiveTitle).trim(),
           description:        (firstMeta.description || description)?.trim() ?? null,
           blob_url:           primaryBlobUrl,
           blob_name:          primaryBlobName,
@@ -292,7 +295,7 @@ export async function POST(req: NextRequest) {
     const { data: movie, error: movieError } = await supabaseAdmin
       .from('movies')
       .insert({
-        title:              title.trim(),
+        title:              effectiveTitle.trim(),
         description:        description?.trim() ?? null,
         blob_url,
         blob_name:          blobName,
