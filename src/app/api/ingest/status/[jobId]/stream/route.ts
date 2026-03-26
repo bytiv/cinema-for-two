@@ -24,6 +24,7 @@ function stageToStatus(stage: string): string | null {
     case 'Fetching torrent info':     return 'running';
     case 'Downloading to servers':    return 'running';
     case 'Transcoding for playback':  return 'transcoding';
+    case 'Generating HLS':            return 'uploading';
     case 'Uploading to storage':      return 'uploading';
     case 'Ready':                     return 'completed';
     case 'Failed':                    return 'failed';

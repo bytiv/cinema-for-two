@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipBack, SkipForward, Subtitles, Settings2 } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, SkipBack, SkipForward, Subtitles, Settings2, Gauge } from 'lucide-react';
 import { formatDuration } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import { useVideoPreloader } from '@/hooks/useVideoPreloader';
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 interface SubtitleTrack { label: string; lang: string; url: string; }
 interface SubtitleStyle {
@@ -33,11 +35,17 @@ interface VideoPlayerProps {
   initialTime?: number;
   onPlaybackEvent?: (event: { type: 'play' | 'pause' | 'seek'; timestamp: number }) => void;
   externalControl?: { type: 'play' | 'pause' | 'seek'; timestamp: number } | null;
+  /** Available quality variants with streaming URLs (null = single quality, no selector) */
+  qualityVariants?: { quality: string; url: string }[] | null;
+  /** HLS master playlist URL — when provided, player uses hls.js for adaptive streaming */
+  hlsMasterUrl?: string | null;
   className?: string;
 }
 
 const BG_MAP    = { black: 'rgba(0,0,0,0.85)', dark: 'rgba(0,0,0,0.45)', none: 'transparent' };
 const COLOR_MAP = { white: '#ffffff', yellow: '#fde68a', cyan: '#a5f3fc' };
+
+const QUALITY_ORDER: Record<string, number> = { '480p': 0, '720p': 1, '1080p': 2, '4K': 3 };
 
 function requestFullscreen(el: HTMLElement) {
   if (el.requestFullscreen)               return el.requestFullscreen();
@@ -52,22 +60,19 @@ function getFullscreenElement() {
   return document.fullscreenElement || (document as any).webkitFullscreenElement || null;
 }
 
-export default function VideoPlayer({ src, subtitles = [], initialTime, onPlaybackEvent, externalControl, className }: VideoPlayerProps) {
+// ── Component ────────────────────────────────────────────────────────────────
+
+export default function VideoPlayer({ src, subtitles = [], initialTime, onPlaybackEvent, externalControl, qualityVariants, hlsMasterUrl, className }: VideoPlayerProps) {
   const videoRef       = useRef<HTMLVideoElement>(null);
   const containerRef   = useRef<HTMLDivElement>(null);
   const progressRef    = useRef<HTMLDivElement>(null);
   const hideTimeoutRef = useRef<NodeJS.Timeout>();
   const isExternalRef  = useRef(false);
   const lastTapRef     = useRef<number>(0);
+  const hlsRef         = useRef<any>(null);
 
-  // ─── FIX 1: Track seeking/buffering state to prevent timeUpdate from
-  //            overwriting the position we're seeking TO with the stale
-  //            position the video is seeking FROM. ───
   const isSeeking      = useRef(false);
   const seekTarget     = useRef<number | null>(null);
-
-  // ─── FIX 2: Deduplicate externalControl to prevent re-seeking on
-  //            parent re-renders that pass the same logical command. ───
   const lastExternalControl = useRef<string | null>(null);
 
   const [isPlaying,    setIsPlaying]    = useState(false);
@@ -81,7 +86,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [isMobile,     setIsMobile]     = useState(false);
   const [isWaiting,    setIsWaiting]    = useState(false);
 
-  // Hover time tooltip
   const [hoverTime,    setHoverTime]    = useState<number | null>(null);
   const [hoverX,       setHoverX]       = useState(0);
 
@@ -90,6 +94,19 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const [showSubMenu,      setShowSubMenu]      = useState(false);
   const [showSubSettings,  setShowSubSettings]  = useState(false);
   const [subStyle, setSubStyle] = useState<SubtitleStyle>(DEFAULT_SUB_STYLE);
+
+  // ── Quality state ──────────────────────────────────────────────────────────
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  // 'auto' = HLS adaptive, or a specific quality like '720p', '1080p'
+  const [selectedQuality, setSelectedQuality]  = useState<string>('auto');
+  // Current quality being played (for display, updated by HLS level switches)
+  const [currentQualityLabel, setCurrentQualityLabel] = useState<string | null>(null);
+  // Whether we're using HLS mode
+  const [hlsActive, setHlsActive] = useState(false);
+
+  const hasVariants = qualityVariants && qualityVariants.length > 1;
+  const hasHls = !!hlsMasterUrl;
+  const showQualitySelector = hasVariants || hasHls;
 
   useEffect(() => {
     setSubStyle(loadSubStyle());
@@ -103,7 +120,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     });
   }, []);
 
-  const preloader = useVideoPreloader({ videoRef, src, enabled: true });
+  const preloader = useVideoPreloader({ videoRef, src: hlsActive ? '' : src, enabled: !hlsActive });
 
   useEffect(() => {
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -120,22 +137,156 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
   }, []);
 
-  // ─── FIX 3: Listen to native seeking/seeked events so we know when the
-  //            browser is actively repositioning the playhead. ───
+  // ── HLS.js initialization ──────────────────────────────────────────────────
   useEffect(() => {
+    if (!hlsMasterUrl || !videoRef.current) {
+      setHlsActive(false);
+      return;
+    }
+
+    // Safari has native HLS support — use it directly
+    const video = videoRef.current;
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = hlsMasterUrl;
+      setHlsActive(true);
+      setCurrentQualityLabel('Auto');
+      return;
+    }
+
+    // For other browsers, dynamically import hls.js
+    let destroyed = false;
+    (async () => {
+      try {
+        const Hls = (await import('hls.js')).default;
+        if (destroyed || !Hls.isSupported()) {
+          // hls.js not supported — fall back to direct MP4
+          setHlsActive(false);
+          return;
+        }
+
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          // Start with auto quality
+          startLevel: -1,
+          // ABR config
+          abrEwmaDefaultEstimate: 500000, // 500kbps initial estimate
+          abrBandWidthFactor: 0.95,
+          abrBandWidthUpFactor: 0.7,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+        });
+
+        hls.loadSource(hlsMasterUrl);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setHlsActive(true);
+          setCurrentQualityLabel('Auto');
+          if (initialTime && initialTime > 0) {
+            video.currentTime = initialTime;
+            setCurrentTime(initialTime);
+          }
+        });
+
+        // Track quality level changes for the UI label
+        hls.on(Hls.Events.LEVEL_SWITCHED, (_: any, data: any) => {
+          const level = hls.levels[data.level];
+          if (level) {
+            const h = level.height;
+            const label = h >= 2160 ? '4K' : h >= 1080 ? '1080p' : h >= 720 ? '720p' : '480p';
+            setCurrentQualityLabel(selectedQuality === 'auto' ? `Auto (${label})` : label);
+          }
+        });
+
+        hls.on(Hls.Events.ERROR, (_: any, data: any) => {
+          if (data.fatal) {
+            console.error('[hls.js] Fatal error:', data.type, data.details);
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hls.startLoad();
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hls.recoverMediaError();
+            } else {
+              // Unrecoverable — fall back to direct MP4
+              hls.destroy();
+              setHlsActive(false);
+              video.src = src;
+            }
+          }
+        });
+
+        hlsRef.current = hls;
+      } catch (err) {
+        console.warn('[VideoPlayer] Failed to load hls.js, falling back to direct playback:', err);
+        setHlsActive(false);
+      }
+    })();
+
+    return () => {
+      destroyed = true;
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [hlsMasterUrl]); // only re-run if the master URL changes
+
+  // ── Quality switching ──────────────────────────────────────────────────────
+  const handleQualitySelect = useCallback((quality: string) => {
     const video = videoRef.current;
     if (!video) return;
 
+    const savedTime = video.currentTime;
+    const wasPlaying = !video.paused;
+
+    setSelectedQuality(quality);
+    setShowQualityMenu(false);
+
+    if (hlsActive && hlsRef.current) {
+      // HLS mode — switch via hls.js API
+      const hls = hlsRef.current;
+      if (quality === 'auto') {
+        hls.currentLevel = -1; // auto ABR
+        setCurrentQualityLabel('Auto');
+      } else {
+        // Find the level matching this quality
+        const levels = hls.levels || [];
+        const targetHeight = quality === '4K' ? 2160 : quality === '1080p' ? 1080 : quality === '720p' ? 720 : 480;
+        const idx = levels.findIndex((l: any) => l.height === targetHeight);
+        if (idx >= 0) {
+          hls.currentLevel = idx;
+          setCurrentQualityLabel(quality);
+        }
+      }
+    } else if (qualityVariants && quality !== 'auto') {
+      // Non-HLS multi-quality — swap MP4 src
+      const variant = qualityVariants.find(v => v.quality === quality);
+      if (variant && variant.url !== video.src) {
+        seekTarget.current = savedTime;
+        isSeeking.current = true;
+
+        video.src = variant.url;
+        video.currentTime = savedTime;
+        setCurrentTime(savedTime);
+        setCurrentQualityLabel(quality);
+
+        if (wasPlaying) {
+          video.play().catch(() => {});
+        }
+      }
+    }
+  }, [hlsActive, qualityVariants]);
+
+  // ── Seeking/seeked events ──────────────────────────────────────────────────
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
     const onSeeking = () => { isSeeking.current = true; };
     const onSeeked  = () => {
       isSeeking.current = false;
-      // Snap UI to the actual landed position
-      if (video) {
-        setCurrentTime(video.currentTime);
-      }
+      if (video) setCurrentTime(video.currentTime);
       seekTarget.current = null;
     };
-
     video.addEventListener('seeking', onSeeking);
     video.addEventListener('seeked',  onSeeked);
     return () => {
@@ -174,19 +325,15 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     return () => clearInterval(interval);
   }, [activeSubtitle]);
 
-  // ─── FIX 2 (cont.): Deduplicate externalControl ───
+  // ── External control ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!externalControl || !videoRef.current) return;
-
-    // Build a fingerprint for this control command
     const fingerprint = `${externalControl.type}:${externalControl.timestamp.toFixed(2)}`;
-    if (lastExternalControl.current === fingerprint) return; // already applied
+    if (lastExternalControl.current === fingerprint) return;
     lastExternalControl.current = fingerprint;
 
     isExternalRef.current = true;
     const v = videoRef.current;
-
-    // Set seekTarget so timeUpdate doesn't fight us
     seekTarget.current = externalControl.timestamp;
     isSeeking.current = true;
 
@@ -242,13 +389,10 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     const rect = progressRef.current.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const time = Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
-
-    // ─── FIX 1 (cont.): Mark that we're seeking so timeUpdate won't fight us ───
     seekTarget.current = time;
     isSeeking.current = true;
-
     videoRef.current.currentTime = time;
-    setCurrentTime(time); // Immediately reflect in UI
+    setCurrentTime(time);
     emitEvent('seek', time);
   };
 
@@ -264,11 +408,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const skip = (s: number) => {
     if (!videoRef.current) return;
     const t = Math.max(0, Math.min(duration, videoRef.current.currentTime + s));
-
-    // ─── FIX 1 (cont.): Same pattern for skip ───
     seekTarget.current = t;
     isSeeking.current = true;
-
     videoRef.current.currentTime = t;
     setCurrentTime(t);
     emitEvent('seek', t);
@@ -320,38 +461,31 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         case 'ArrowRight': skip(10);  break;
         case 'm': toggleMute(); break;
         case 'f': toggleFullscreen(); break;
+        case 'q': // Cycle quality
+          if (showQualitySelector && qualityVariants) {
+            const qualities = ['auto', ...qualityVariants.map(v => v.quality).sort((a, b) => (QUALITY_ORDER[a] ?? 0) - (QUALITY_ORDER[b] ?? 0))];
+            const idx = qualities.indexOf(selectedQuality);
+            const next = qualities[(idx + 1) % qualities.length];
+            handleQualitySelect(next);
+          }
+          break;
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isPlaying, duration]);
+  }, [isPlaying, duration, selectedQuality, showQualitySelector, qualityVariants, handleQualitySelect]);
 
-  // ─── FIX 1 (core): The onTimeUpdate handler now guards against stale
-  //     position reports while the browser is seeking or buffering. ───
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-
-    // If we're in the middle of a seek, don't let the browser's "old"
-    // position overwrite the UI — it fires timeUpdate with the FROM
-    // position before it arrives at the TO position.
     if (isSeeking.current) return;
-
-    // Extra guard: if we have a pending seek target and the video hasn't
-    // reached close to it yet, ignore the update.
     if (seekTarget.current !== null) {
-      if (Math.abs(video.currentTime - seekTarget.current) > 1.5) {
-        return;
-      }
-      // Close enough — clear the target
+      if (Math.abs(video.currentTime - seekTarget.current) > 1.5) return;
       seekTarget.current = null;
     }
-
     setCurrentTime(video.currentTime);
   }, []);
 
-  // ─── FIX 4: Read the correct buffered range (the one containing currentTime)
-  //            instead of always reading the last range. ───
   const handleProgress = useCallback(() => {
     const video = videoRef.current;
     if (!video || !video.buffered.length) return;
@@ -363,7 +497,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         break;
       }
     }
-    // Fallback: if we didn't find a range containing currentTime, use the last range
     if (end === 0 && video.buffered.length > 0) {
       end = video.buffered.end(video.buffered.length - 1);
     }
@@ -373,6 +506,11 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   const subBottom = subStyle.position === 'bottom' ? (showControls ? '80px' : '20px') : undefined;
   const subTop    = subStyle.position === 'top' ? '20px' : undefined;
 
+  // Build sorted quality list for the menu
+  const qualityOptions = qualityVariants
+    ? [...qualityVariants].sort((a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0))
+    : [];
+
   return (
     <div
       ref={containerRef}
@@ -380,11 +518,11 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       onMouseMove={showControlsTemporarily}
       onMouseLeave={() => isPlaying && setShowControls(false)}
       onTouchStart={handleTap}
-      onClick={() => { setShowSubMenu(false); setShowSubSettings(false); }}
+      onClick={() => { setShowSubMenu(false); setShowSubSettings(false); setShowQualityMenu(false); }}
     >
       <video
         ref={videoRef}
-        src={src}
+        src={hlsActive ? undefined : src}
         className="w-full h-full object-contain"
         onClick={isMobile ? undefined : togglePlay}
         preload="auto"
@@ -393,7 +531,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         onLoadedMetadata={() => {
           if (videoRef.current) {
             setDuration(videoRef.current.duration);
-            if (initialTime && initialTime > 0) {
+            if (initialTime && initialTime > 0 && !hlsActive) {
               seekTarget.current = initialTime;
               isSeeking.current = true;
               videoRef.current.currentTime = initialTime;
@@ -462,7 +600,6 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           onMouseMove={handleProgressMouseMove}
           onMouseLeave={() => setHoverTime(null)}
         >
-          {/* Hover time tooltip */}
           {hoverTime !== null && (
             <div
               className="absolute -top-8 pointer-events-none z-50"
@@ -475,9 +612,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           )}
 
           <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-white/20 rounded-full overflow-hidden">
-            {/* Buffered bar */}
             <div className="absolute inset-y-0 left-0 bg-white/25 rounded-full" style={{ width: `${duration ? (buffered / duration) * 100 : 0}%` }} />
-            {/* Playhead */}
             <div className="absolute inset-y-0 left-0 bg-cinema-accent rounded-full" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}>
               <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-cinema-accent shadow-lg" />
             </div>
@@ -514,10 +649,71 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+
+            {/* ── Quality selector ── */}
+            {showQualitySelector && (
+              <div className="relative">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowQualityMenu(v => !v); setShowSubMenu(false); setShowSubSettings(false); }}
+                  className={cn(
+                    'flex items-center gap-1 px-2 py-1 rounded-lg transition-colors text-xs sm:text-sm',
+                    showQualityMenu ? 'text-cinema-accent bg-cinema-accent/10' : 'text-white/70 hover:text-white',
+                  )}
+                >
+                  <Gauge className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  {currentQualityLabel && (
+                    <span className="text-xs font-medium hidden sm:inline">{currentQualityLabel}</span>
+                  )}
+                </button>
+
+                {showQualityMenu && (
+                  <div
+                    className="absolute bottom-10 right-0 bg-cinema-card border border-cinema-border rounded-xl shadow-2xl py-1 min-w-[140px] z-50"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <p className="text-[10px] text-cinema-text-dim px-3 pt-1 pb-1.5 uppercase tracking-wider">Quality</p>
+
+                    {/* Auto option — only shown when HLS is active */}
+                    {hasHls && (
+                      <button
+                        onClick={() => handleQualitySelect('auto')}
+                        className={cn(
+                          'w-full text-left px-4 py-2 text-sm hover:bg-cinema-surface flex items-center justify-between',
+                          selectedQuality === 'auto' ? 'text-cinema-accent font-medium' : 'text-cinema-text',
+                        )}
+                      >
+                        <span>Auto</span>
+                        {selectedQuality === 'auto' && currentQualityLabel && (
+                          <span className="text-[10px] text-cinema-text-dim ml-2">
+                            {currentQualityLabel.replace('Auto ', '').replace(/[()]/g, '')}
+                          </span>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Individual quality options */}
+                    {qualityOptions.map((v) => (
+                      <button
+                        key={v.quality}
+                        onClick={() => handleQualitySelect(v.quality)}
+                        className={cn(
+                          'w-full text-left px-4 py-2 text-sm hover:bg-cinema-surface',
+                          selectedQuality === v.quality ? 'text-cinema-accent font-medium' : 'text-cinema-text',
+                        )}
+                      >
+                        {v.quality}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Subtitle selector ── */}
             {subtitles.length > 0 && (
               <div className="relative">
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowSubMenu(v => !v); setShowSubSettings(false); }}
+                  onClick={(e) => { e.stopPropagation(); setShowSubMenu(v => !v); setShowSubSettings(false); setShowQualityMenu(false); }}
                   className={cn('flex items-center gap-1 px-2 py-1 rounded-lg transition-colors text-xs sm:text-sm', activeSubtitle ? 'text-cinema-accent bg-cinema-accent/10' : 'text-white/70 hover:text-white')}
                 >
                   <Subtitles className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -535,10 +731,11 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
               </div>
             )}
 
+            {/* ── Subtitle settings ── */}
             {subtitles.length > 0 && activeSubtitle && !isMobile && (
               <div className="relative">
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowSubSettings(v => !v); setShowSubMenu(false); }}
+                  onClick={(e) => { e.stopPropagation(); setShowSubSettings(v => !v); setShowSubMenu(false); setShowQualityMenu(false); }}
                   className={cn('p-1.5 rounded-lg transition-colors', showSubSettings ? 'text-cinema-accent bg-cinema-accent/10' : 'text-white/70 hover:text-white')}
                 >
                   <Settings2 className="w-4 h-4" />

@@ -5,7 +5,7 @@ import StarField from '@/components/layout/StarField';
 import SpaceBackground from '@/components/layout/SpaceBackground';
 
 export const metadata: Metadata = {
-  title: 'CinemaForTwo 🎬',
+  title: 'CinemaForTwo',
   description: 'Watch movies together, just the two of us',
   icons: { icon: '/icons/favicon.svg' },
 };

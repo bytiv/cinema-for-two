@@ -88,7 +88,8 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { hash, movie_name, blob_base_name, trackers, metadata } = body;
+    const { hash, movie_name, blob_base_name, trackers, metadata,
+            ingest_group_id, assigned_quality, generate_hls } = body;
 
     if (!hash || !movie_name || !blob_base_name) {
       return NextResponse.json(
@@ -236,15 +237,18 @@ export async function POST(req: NextRequest) {
     const { data: job, error: insertError } = await supabaseAdmin
       .from('ingest_jobs')
       .insert({
-        user_id:        user.id,
+        user_id:          user.id,
         hash,
         movie_name,
-        status:         'pending',
-        metadata:       metadata ?? {},
-        container_name: containerName,
-        container_ip:   ip,
-        container_rg:   process.env.AZURE_RESOURCE_GROUP ?? 'cinema-ingest-rg',
-        hmac_secret:    hmacSecret,
+        status:           'pending',
+        metadata:         metadata ?? {},
+        container_name:   containerName,
+        container_ip:     ip,
+        container_rg:     process.env.AZURE_RESOURCE_GROUP ?? 'cinema-ingest-rg',
+        hmac_secret:      hmacSecret,
+        ingest_group_id:  ingest_group_id ?? null,
+        assigned_quality: assigned_quality ?? null,
+        generate_hls:     generate_hls ?? false,
       })
       .select('id')
       .single();
@@ -265,6 +269,7 @@ export async function POST(req: NextRequest) {
         storage_key:     process.env.AZURE_STORAGE_ACCOUNT_KEY!,
         container_name:  process.env.AZURE_STORAGE_CONTAINER_MOVIES!,
         trackers,
+        generate_hls:    generate_hls ?? false,
       });
     } catch (err: any) {
       // Python rejected it — mark failed

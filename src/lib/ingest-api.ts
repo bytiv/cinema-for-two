@@ -78,6 +78,7 @@ export interface IngestJobRequest {
   storage_key:     string;
   container_name:  string;
   trackers?:       string[];
+  generate_hls?:   boolean;  // whether to generate byte-range HLS playlist after remux
 }
 
 // ── API calls (all accept ip + hmacSecret directly) ──────────────────────

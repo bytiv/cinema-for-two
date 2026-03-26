@@ -26,10 +26,19 @@ export interface PostcardShare {
 export type VideoQuality = '480p' | '720p' | '1080p' | '4K';
 export type IngestMethod = 'direct_upload' | 'torrent';
 
+export interface QualityVariant {
+  quality: VideoQuality;
+  blob_name: string;
+  blob_url: string;
+  file_size: number;
+  hls_playlist: string | null;  // blob name of byte-range .m3u8 for this quality (null if HLS disabled)
+}
+
 export type TorrentJobStage =
   | 'Fetching torrent info'
   | 'Downloading to servers'
   | 'Transcoding for playback'
+  | 'Generating HLS'
   | 'Uploading to storage'
   | 'Ready'
   | 'Failed'
@@ -88,8 +97,12 @@ export interface Movie {
   ingest_method: IngestMethod;
   info_hash: string | null;       // null for direct uploads
   ingest_job_id: string | null;   // null for direct uploads
+  ingest_group_id: string | null; // groups multi-quality ingest jobs together
   uploaded_by: string;
   is_public: boolean;
+  // Multi-quality & HLS
+  quality_variants: QualityVariant[] | null;   // null = single-quality (legacy)
+  hls_master_playlist: string | null;          // blob name of master .m3u8 (null if HLS disabled)
   created_at: string;
   updated_at: string;
   // Joined
@@ -202,6 +215,9 @@ export interface TorrentJobRequest {
   hash: string;             // bare InfoHash or full magnet URI
   name: string;             // desired filename without extension
   trackers?: string[];
+  ingest_group_id?: string; // groups multi-quality jobs together
+  assigned_quality?: VideoQuality; // which quality this job represents
+  generate_hls?: boolean;   // whether to generate byte-range HLS playlist
 }
 
 

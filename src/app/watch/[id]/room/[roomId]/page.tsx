@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Movie, Profile, PlaybackEvent } from '@/types';
+import { Movie, Profile, PlaybackEvent, QualityVariant } from '@/types';
 import VideoPlayer from '@/components/watch/VideoPlayer';
 import ChatPanel from '@/components/watch/ChatPanel';
 import Button from '@/components/ui/Button';
@@ -24,6 +24,8 @@ export default function WatchRoomPage() {
   const [movie,           setMovie]           = useState<Movie | null>(null);
   const [currentUser,     setCurrentUser]     = useState<{ id: string; profile: Profile } | null>(null);
   const [videoUrl,        setVideoUrl]        = useState<string | null>(null);
+  const [videoVariants,   setVideoVariants]   = useState<{ quality: string; url: string }[] | null>(null);
+  const [hlsMasterUrl,    setHlsMasterUrl]    = useState<string | null>(null);
   const [loading,         setLoading]         = useState(true);
   const [chatOpen,        setChatOpen]        = useState(false);   // mobile: drawer closed by default
   const [desktopChat,     setDesktopChat]     = useState(true);    // desktop sidebar
@@ -60,8 +62,22 @@ export default function WatchRoomPage() {
 
     if (movieRes.data) {
       setMovie(movieRes.data);
-      const res = await fetch(`/api/movies/stream?blobName=${encodeURIComponent(movieRes.data.blob_name)}`);
-      if (res.ok) { const { url } = await res.json(); setVideoUrl(url); }
+      const hasVariants = movieRes.data.quality_variants && movieRes.data.quality_variants.length > 0;
+
+      if (hasVariants) {
+        // Multi-quality: use movieId-based streaming API
+        const res = await fetch(`/api/movies/stream?movieId=${encodeURIComponent(movieRes.data.id)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setVideoUrl(data.url);
+          if (data.variants) setVideoVariants(data.variants);
+          if (data.hlsMasterUrl) setHlsMasterUrl(data.hlsMasterUrl);
+        }
+      } else {
+        // Legacy single-quality: use blobName
+        const res = await fetch(`/api/movies/stream?blobName=${encodeURIComponent(movieRes.data.blob_name)}`);
+        if (res.ok) { const { url } = await res.json(); setVideoUrl(url); }
+      }
     }
     if (profileRes.data) setCurrentUser({ id: user.id, profile: profileRes.data });
     setLoading(false);
@@ -228,6 +244,8 @@ export default function WatchRoomPage() {
             initialTime={isWatchTogether ? watchRoom.savedTime : 0}
             onPlaybackEvent={handlePlaybackEvent}
             externalControl={externalControl}
+            qualityVariants={videoVariants}
+            hlsMasterUrl={hlsMasterUrl}
             className="w-full h-full"
           />
         </div>

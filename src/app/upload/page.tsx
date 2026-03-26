@@ -14,7 +14,7 @@ import {
   Upload, Film, Image as ImageIcon, X, CheckCircle, AlertCircle,
   Plus, Globe, Gauge, Clock, Hash, Magnet, Download, HardDrive,
   Users, Zap, Ban, Loader2, ArrowRight, AlertTriangle, FolderOpen,
-  Server, Wifi, WifiOff, Search, Star, Calendar, Tag, ChevronLeft,
+  Server, Wifi, WifiOff, Search, Star, Calendar, Tag, ChevronLeft, Layers, Radio,
 } from 'lucide-react';
 import type { TMDBSearchResult, TMDBMovieDetail, TMDBTVDetail, TMDBSeason, TMDBEpisode, TorrentSearchResult } from '@/types';
 
@@ -134,6 +134,7 @@ function stageColor(stage: string) {
   if (stage === 'Cancelled')                return 'text-cinema-text-dim bg-cinema-card border-cinema-border';
   if (stage === 'Uploading to storage')     return 'text-cinema-warm bg-cinema-warm/10 border-cinema-warm/20';
   if (stage === 'Transcoding for playback') return 'text-purple-400 bg-purple-400/10 border-purple-400/20';
+  if (stage === 'Generating HLS')           return 'text-teal-400 bg-teal-400/10 border-teal-400/20';
   return 'text-cinema-secondary bg-cinema-secondary/10 border-cinema-secondary/20';
 }
 
@@ -144,6 +145,7 @@ function stageIcon(stage: string) {
   if (stage === 'Uploading to storage')     return <HardDrive className="w-3.5 h-3.5" />;
   if (stage === 'Downloading to servers')   return <Download className="w-3.5 h-3.5" />;
   if (stage === 'Transcoding for playback') return <Zap className="w-3.5 h-3.5" />;
+  if (stage === 'Generating HLS')           return <Radio className="w-3.5 h-3.5" />;
   return <Loader2 className="w-3.5 h-3.5 animate-spin" />;
 }
 
@@ -457,6 +459,15 @@ export default function UploadPage() {
   const [torrentSeasonNum,     setTorrentSeasonNum]     = useState<number | null>(null);
   const [torrentEpisodeNum,    setTorrentEpisodeNum]    = useState<number | null>(null);
   const [torrentEpisodeTitle,  setTorrentEpisodeTitle]  = useState('');
+
+  // ── Multi-quality & HLS toggles ─────────────────────────
+  const [multiQualityEnabled,  setMultiQualityEnabled]  = useState(false);
+  const [hlsEnabled,           setHlsEnabled]           = useState(false);
+  const [secondHashInput,      setSecondHashInput]      = useState('');
+  const [secondQuality,        setSecondQuality]        = useState<VideoQuality>('720p');
+  const [firstQuality,         setFirstQuality]         = useState<VideoQuality>('1080p');
+  const [secondReleaseName,    setSecondReleaseName]    = useState('');
+  const [secondSourceType,     setSecondSourceType]     = useState('');
 
   // ── Subtitle language preference state ──────────────────────
   const [subtitleLangs,        setSubtitleLangs]        = useState<string[]>(['ar']);
@@ -812,6 +823,14 @@ export default function UploadPage() {
   // ─────────────────────────────────────────────────────────
   const handleTorrentSubmit = async () => {
     if (!hashInput.trim() || !torrentTitle.trim()) return;
+    if (multiQualityEnabled && !secondHashInput.trim()) {
+      setTorrentError('Multi-quality is enabled — please provide a torrent for the second quality.');
+      return;
+    }
+    if (multiQualityEnabled && firstQuality === secondQuality) {
+      setTorrentError('Please select two different qualities for multi-quality download.');
+      return;
+    }
     setSubmitPhase('idle');
     setTorrentError('');
 
@@ -902,44 +921,50 @@ export default function UploadPage() {
       const slug         = torrentTitle.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const blobBaseName = `${user.id}/${Date.now()}-${slug}`;
 
-      // ── 4. Submit to /api/ingest/submit (Stage 4 route) ────
-      //    Submit and immediately switch to Active Jobs. The job card
-      //    will show "Starting server..." until SSE events arrive.
+      // ── 4. Submit to /api/ingest/submit ─────────────────────
       setSubmitPhase('submitting');
 
-      let jobId: string;
+      // Generate a group ID if multi-quality is enabled
+      const groupId = multiQualityEnabled ? `grp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : undefined;
+
+      const sharedMetadata = {
+        description: torrentDesc.trim() || undefined,
+        quality:     torrentQuality ?? undefined,
+        posterUrl,
+        subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
+        tmdb_id:           selectedTmdb?.tmdb_id ?? undefined,
+        release_date:      torrentReleaseDate.trim() || undefined,
+        rating:            torrentRating.trim() ? parseFloat(torrentRating) : undefined,
+        genres:            torrentGenres.trim() ? torrentGenres.split(',').map((g) => g.trim()).filter(Boolean) : undefined,
+        runtime:           torrentRuntime.trim() ? parseInt(torrentRuntime, 10) : undefined,
+        tagline:           torrentTagline.trim() || undefined,
+        imdb_id:           torrentImdbId.trim() || undefined,
+        original_language: torrentLanguage.trim() || undefined,
+        source_type:       torrentSourceType.trim() || undefined,
+        release_name:      torrentReleaseName.trim() || undefined,
+        series_name:       torrentSeriesName.trim() || undefined,
+        season_number:     torrentSeasonNum ?? undefined,
+        episode_number:    torrentEpisodeNum ?? undefined,
+        episode_title:     torrentEpisodeTitle.trim() || undefined,
+        subtitle_languages: ['en', 'ar', ...subtitleLangs.filter((l) => l !== 'en' && l !== 'ar')],
+      };
+
+      const jobIds: string[] = [];
+      const newJobs: ActiveJob[] = [];
+
+      // Submit first (primary) torrent job
       try {
         const res = await fetch('/api/ingest/submit', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            hash:           hashInput.trim(),
-            movie_name:     torrentTitle.trim(),
-            blob_base_name: blobBaseName,
-            metadata: {
-              description: torrentDesc.trim() || undefined,
-              quality:     torrentQuality ?? undefined,
-              posterUrl,
-              subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
-              // TMDB / manual metadata
-              tmdb_id:           selectedTmdb?.tmdb_id ?? undefined,
-              release_date:      torrentReleaseDate.trim() || undefined,
-              rating:            torrentRating.trim() ? parseFloat(torrentRating) : undefined,
-              genres:            torrentGenres.trim() ? torrentGenres.split(',').map((g) => g.trim()).filter(Boolean) : undefined,
-              runtime:           torrentRuntime.trim() ? parseInt(torrentRuntime, 10) : undefined,
-              tagline:           torrentTagline.trim() || undefined,
-              imdb_id:           torrentImdbId.trim() || undefined,
-              original_language: torrentLanguage.trim() || undefined,
-              source_type:       torrentSourceType.trim() || undefined,
-              release_name:      torrentReleaseName.trim() || undefined,
-              // Series metadata
-              series_name:       torrentSeriesName.trim() || undefined,
-              season_number:     torrentSeasonNum ?? undefined,
-              episode_number:    torrentEpisodeNum ?? undefined,
-              episode_title:     torrentEpisodeTitle.trim() || undefined,
-              // Subtitle language preference for auto-download
-              subtitle_languages: ['en', 'ar', ...subtitleLangs.filter((l) => l !== 'en' && l !== 'ar')],
-            },
+            hash:              hashInput.trim(),
+            movie_name:        torrentTitle.trim(),
+            blob_base_name:    blobBaseName + (multiQualityEnabled ? `-${firstQuality}` : ''),
+            ingest_group_id:   groupId,
+            assigned_quality:  multiQualityEnabled ? firstQuality : (torrentQuality ?? undefined),
+            generate_hls:      hlsEnabled,
+            metadata:          sharedMetadata,
           }),
         });
 
@@ -949,30 +974,72 @@ export default function UploadPage() {
         }
 
         const data = await res.json();
-        jobId = data.job_id;
+        jobIds.push(data.job_id);
+
+        const streamMeta = {
+          description: torrentDesc.trim() || undefined,
+          quality:     multiQualityEnabled ? firstQuality : (torrentQuality ?? undefined),
+          posterUrl,
+          subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
+        };
+
+        newJobs.push({
+          jobId:     data.job_id,
+          title:     multiQualityEnabled ? `${torrentTitle.trim()} [${firstQuality}]` : torrentTitle.trim(),
+          hash:      hashInput.trim(),
+          job:       null,
+          streamMeta,
+          startedAt: Date.now(),
+        });
       } catch (err) {
         throw err;
       }
 
+      // Submit second torrent job if multi-quality is enabled
+      if (multiQualityEnabled && secondHashInput.trim()) {
+        try {
+          const res2 = await fetch('/api/ingest/submit', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              hash:              secondHashInput.trim(),
+              movie_name:        torrentTitle.trim(),
+              blob_base_name:    blobBaseName + `-${secondQuality}`,
+              ingest_group_id:   groupId,
+              assigned_quality:  secondQuality,
+              generate_hls:      hlsEnabled,
+              metadata:          {
+                ...sharedMetadata,
+                source_type:    secondSourceType.trim() || undefined,
+                release_name:   secondReleaseName.trim() || undefined,
+              },
+            }),
+          });
+
+          if (!res2.ok) {
+            const body2 = await res2.json();
+            throw new Error(body2.error ?? 'Failed to start second quality ingest');
+          }
+
+          const data2 = await res2.json();
+          jobIds.push(data2.job_id);
+
+          newJobs.push({
+            jobId:     data2.job_id,
+            title:     `${torrentTitle.trim()} [${secondQuality}]`,
+            hash:      secondHashInput.trim(),
+            job:       null,
+            streamMeta: { quality: secondQuality, posterUrl },
+            startedAt: Date.now(),
+          });
+        } catch (err) {
+          throw err;
+        }
+      }
+
       // ── 5. Add to active jobs + attach SSE ─────────────────
-      const streamMeta = {
-        description: torrentDesc.trim() || undefined,
-        quality:     torrentQuality ?? undefined,
-        posterUrl,
-        subtitles:   uploadedSubtitles.length > 0 ? uploadedSubtitles : undefined,
-      };
-
-      const newJob: ActiveJob = {
-        jobId,
-        title:     torrentTitle.trim(),
-        hash:      hashInput.trim(),
-        job:       null,
-        streamMeta,
-        startedAt: Date.now(),
-      };
-
-      setActiveJobs((prev) => [newJob, ...prev]);
-      _attachStream(jobId, torrentTitle.trim(), streamMeta);
+      setActiveJobs((prev) => [...newJobs, ...prev]);
+      newJobs.forEach((nj) => _attachStream(nj.jobId, nj.title, nj.streamMeta));
 
       // ── 6. Reset form ───────────────────────────────────────
       setHashInput('');
@@ -1002,6 +1069,14 @@ export default function UploadPage() {
       setSelectedSeason(null);
       setSelectedEpisode(null);
       setTmdbQuality(null);
+      // Multi-quality reset
+      setMultiQualityEnabled(false);
+      setHlsEnabled(false);
+      setSecondHashInput('');
+      setSecondQuality('720p');
+      setFirstQuality('1080p');
+      setSecondReleaseName('');
+      setSecondSourceType('');
       setSubmitPhase('done');
       setTab('jobs');
 
@@ -2592,6 +2667,128 @@ export default function UploadPage() {
               </div>
             </div>
 
+            {/* ── Multi-Quality & HLS Toggles ────────────────── */}
+            <div className="bg-cinema-card/50 backdrop-blur-sm border border-cinema-border rounded-2xl p-6 space-y-4">
+              <h3 className="font-display text-base font-semibold text-cinema-text flex items-center gap-2">
+                <Layers className="w-4 h-4 text-cinema-accent" /> Advanced Options
+              </h3>
+
+              {/* Multi-Quality toggle */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-cinema-surface border border-cinema-border">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-cinema-text">Multiple Qualities</p>
+                  <p className="text-xs text-cinema-text-dim mt-0.5">Download two torrents (720p + 1080p) as quality variants</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMultiQualityEnabled(v => !v)}
+                  className={cn(
+                    'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                    multiQualityEnabled ? 'bg-cinema-accent' : 'bg-cinema-border',
+                  )}
+                >
+                  <span className={cn(
+                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    multiQualityEnabled ? 'translate-x-5' : 'translate-x-0',
+                  )} />
+                </button>
+              </div>
+
+              {/* HLS toggle */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-cinema-surface border border-cinema-border">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-cinema-text flex items-center gap-2">
+                    HLS Streaming
+                    <Radio className="w-3.5 h-3.5 text-cinema-secondary" />
+                  </p>
+                  <p className="text-xs text-cinema-text-dim mt-0.5">
+                    {multiQualityEnabled
+                      ? 'Seamless quality switching while watching — auto-adjusts to your network'
+                      : 'Chunked delivery for smoother playback (works with single quality too)'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHlsEnabled(v => !v)}
+                  className={cn(
+                    'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                    hlsEnabled ? 'bg-cinema-secondary' : 'bg-cinema-border',
+                  )}
+                >
+                  <span className={cn(
+                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    hlsEnabled ? 'translate-x-5' : 'translate-x-0',
+                  )} />
+                </button>
+              </div>
+
+              {/* Multi-quality: quality assignment + second torrent input */}
+              {multiQualityEnabled && (
+                <div className="space-y-4 pt-3 border-t border-cinema-border/50 animate-fade-in">
+                  {/* Quality assignment for first torrent */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-cinema-text-muted">
+                      First torrent quality <span className="text-cinema-text-dim">(the hash above)</span>
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([{ value: '720p' as const, label: '720p', desc: 'HD' }, { value: '1080p' as const, label: '1080p', desc: 'Full HD' }]).map((opt) => (
+                        <button key={opt.value} type="button" onClick={() => {
+                          setFirstQuality(opt.value);
+                          if (opt.value === secondQuality) setSecondQuality(opt.value === '720p' ? '1080p' : '720p');
+                        }}
+                          className={cn('flex flex-col items-center py-2.5 px-3 rounded-xl border text-xs font-medium transition-all duration-200',
+                            firstQuality === opt.value ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent' : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-text')}>
+                          <span className="text-sm font-bold">{opt.label}</span>
+                          <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Second torrent input */}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-cinema-text-muted">
+                      <Hash className="w-4 h-4 text-cinema-secondary" /> Second Torrent ({secondQuality})
+                    </label>
+                    <textarea
+                      placeholder={`Paste the ${secondQuality} torrent hash or magnet link`}
+                      value={secondHashInput}
+                      onChange={(e) => setSecondHashInput(e.target.value)}
+                      rows={2}
+                      className="w-full rounded-xl bg-cinema-card border border-cinema-border px-4 py-3 text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-secondary/50 focus:ring-2 focus:ring-cinema-secondary/20 transition-all resize-none font-mono text-sm"
+                    />
+                    {secondHashInput.trim() && (
+                      <div className="flex items-center gap-2 mt-1">
+                        {secondHashInput.trim().toLowerCase().startsWith('magnet:') ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-cinema-secondary bg-cinema-secondary/10 border border-cinema-secondary/20 rounded-lg px-2.5 py-1">
+                            <Magnet className="w-3 h-3" /> Magnet link detected
+                          </span>
+                        ) : /^[a-fA-F0-9]{40}$/.test(secondHashInput.trim()) ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-cinema-success bg-cinema-success/10 border border-cinema-success/20 rounded-lg px-2.5 py-1">
+                            <CheckCircle className="w-3 h-3" /> Valid info hash
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-cinema-warm bg-cinema-warm/10 border border-cinema-warm/20 rounded-lg px-2.5 py-1">
+                            <AlertTriangle className="w-3 h-3" /> Looks incomplete
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Summary */}
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-cinema-accent/5 border border-cinema-accent/15">
+                    <Layers className="w-4 h-4 text-cinema-accent flex-shrink-0" />
+                    <p className="text-xs text-cinema-text-muted">
+                      Two separate downloads will run: <span className="text-cinema-accent font-medium">{firstQuality}</span> and <span className="text-cinema-secondary font-medium">{secondQuality}</span>.
+                      The movie will be created once both complete.
+                      {hlsEnabled && <span className="text-cinema-secondary"> HLS playlists will be generated for seamless quality switching.</span>}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* How it works */}
             <div className="flex items-start gap-3 p-4 rounded-xl bg-cinema-secondary/8 border border-cinema-secondary/20">
               <Zap className="w-4 h-4 text-cinema-secondary flex-shrink-0 mt-0.5" />
@@ -2614,13 +2811,13 @@ export default function UploadPage() {
 
             <Button
               onClick={handleTorrentSubmit}
-              disabled={!hashInput.trim() || !torrentTitle.trim() || isSubmitting}
+              disabled={!hashInput.trim() || !torrentTitle.trim() || isSubmitting || (multiQualityEnabled && !secondHashInput.trim())}
               loading={isSubmitting}
               size="lg"
               className="w-full"
               icon={isSubmitting ? undefined : <Download className="w-5 h-5" />}
             >
-              {isSubmitting ? PHASE_LABELS[submitPhase] : 'Start Download'}
+              {isSubmitting ? PHASE_LABELS[submitPhase] : multiQualityEnabled ? 'Start Both Downloads' : 'Start Download'}
             </Button>
           </div>
         )}
