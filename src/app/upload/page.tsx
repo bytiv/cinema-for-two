@@ -799,23 +799,20 @@ export default function UploadPage() {
     streamMeta?: ActiveJob['streamMeta'],
   ) {
     try {
+      // Get the clean title from the active job (strip quality suffix like " [720p]")
+      const aj = activeJobs.find(j => j.jobId === jobId);
+      const titleClean = aj?.title?.replace(/\s*\[.*\]$/, '') || 'Untitled';
+
       const res = await fetch('/api/ingest/finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           job_id:           jobId,
           blob_url:         blobUrl,
-          title:            streamMeta?.description ? '' : 'Untitled', // title comes from metadata
+          title:            titleClean,
           ingest_group_id:  groupId,
           assigned_quality: assignedQuality,
           hls_playlist:     hlsPlaylist,
-          // Pass minimal required fields — the finalize endpoint reads the rest from job metadata
-          ...(() => {
-            // We need to get the title from the active job
-            const aj = activeJobs.find(j => j.jobId === jobId);
-            const titleClean = aj?.title?.replace(/\s*\[.*\]$/, '') || 'Untitled';
-            return { title: titleClean };
-          })(),
         }),
       });
 
