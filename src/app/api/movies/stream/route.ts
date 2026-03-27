@@ -117,7 +117,7 @@ export async function GET(req: Request) {
         }
       }
 
-      // ── Quality variants — return SAS URLs + master playlist URL ─────
+      // ── Quality variants — return SAS URLs ──────────────────────────
       if (variants && variants.length > 0) {
         const variantUrls = variants.map(v => ({
           quality: v.quality,
@@ -125,22 +125,12 @@ export async function GET(req: Request) {
           file_size: v.file_size,
         }));
 
-        // Check if any variants have HLS playlists for the master URL
-        const hasHlsPlaylists = variants.some(v => v.hls_playlist);
-
-        // hlsMasterUrl points back to THIS endpoint so the player fetches
-        // a fresh dynamic master playlist (not the stale static blob)
-        const hlsMasterUrl = hasHlsPlaylists
-          ? `/api/movies/stream?movieId=${encodeURIComponent(movieId)}&hls=master`
-          : null;
-
         if (quality) {
           const match = variantUrls.find(v => v.quality === quality);
           if (match) {
             return NextResponse.json({
               url: match.url,
               variants: variantUrls,
-              hlsMasterUrl,
             });
           }
         }
@@ -153,7 +143,6 @@ export async function GET(req: Request) {
         return NextResponse.json({
           url: sorted[0].url,
           variants: variantUrls,
-          hlsMasterUrl,
         });
       }
 
