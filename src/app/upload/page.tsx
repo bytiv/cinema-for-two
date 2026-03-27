@@ -2296,10 +2296,15 @@ export default function UploadPage() {
                               Exceeds limit
                             </span>
                           ) : multiQualityEnabled && r.quality && multiQualityPicks[r.quality]?.hash === r.hash ? (
-                            <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-success/10 text-cinema-success border border-cinema-success/20 mt-0.5">
-                              <CheckCircle className="w-3.5 h-3.5" />
-                              Picked
-                            </span>
+                            <button
+                              onClick={() => setMultiQualityPicks(prev => { const next = { ...prev }; delete next[r.quality!]; return next; })}
+                              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-success/10 text-cinema-success border border-cinema-success/20 mt-0.5 hover:bg-cinema-error/10 hover:text-cinema-error hover:border-cinema-error/20 transition-all group"
+                            >
+                              <CheckCircle className="w-3.5 h-3.5 group-hover:hidden" />
+                              <X className="w-3.5 h-3.5 hidden group-hover:block" />
+                              <span className="group-hover:hidden">Picked</span>
+                              <span className="hidden group-hover:inline">Remove</span>
+                            </button>
                           ) : multiQualityEnabled && !r.quality ? (
                             <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-surface text-cinema-text-dim border border-cinema-border mt-0.5 cursor-not-allowed">
                               No quality tag
@@ -2626,10 +2631,15 @@ export default function UploadPage() {
                             {isOversized ? (
                               <span className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-error/5 text-cinema-error/50 border border-cinema-error/10 cursor-not-allowed">Exceeds limit</span>
                             ) : multiQualityEnabled && r.quality && multiQualityPicks[r.quality]?.hash === r.hash ? (
-                              <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-success/10 text-cinema-success border border-cinema-success/20 mt-0.5">
-                                <CheckCircle className="w-3.5 h-3.5" />
-                                Picked
-                              </span>
+                              <button
+                                onClick={() => setMultiQualityPicks(prev => { const next = { ...prev }; delete next[r.quality!]; return next; })}
+                                className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-success/10 text-cinema-success border border-cinema-success/20 mt-0.5 hover:bg-cinema-error/10 hover:text-cinema-error hover:border-cinema-error/20 transition-all group"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5 group-hover:hidden" />
+                                <X className="w-3.5 h-3.5 hidden group-hover:block" />
+                                <span className="group-hover:hidden">Picked</span>
+                                <span className="hidden group-hover:inline">Remove</span>
+                              </button>
                             ) : multiQualityEnabled && !r.quality ? (
                               <span className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-cinema-surface text-cinema-text-dim border border-cinema-border mt-0.5 cursor-not-allowed">
                                 No quality tag
