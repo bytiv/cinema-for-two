@@ -76,28 +76,47 @@ export async function POST(req: NextRequest) {
     // ── Multi-quality grouped path ────────────────────────────────────────
     if (groupId) {
       // Update this job's metadata with its blob_url and quality info
+      // ONLY update fields that are actually provided — don't overwrite existing metadata with undefined
+      const existingMeta = (job as any).metadata || {};
+      const updatedMeta = {
+        ...existingMeta,
+        blob_url,
+        assigned_quality: assigned_quality || job.assigned_quality || existingMeta.assigned_quality,
+        hls_playlist: hls_playlist || existingMeta.hls_playlist || null,
+      };
+      // Only overwrite metadata fields if they were actually sent (not undefined)
+      if (title) updatedMeta.title = title;
+      if (description !== undefined) updatedMeta.description = description;
+      if (poster_url) updatedMeta.poster_url = poster_url;
+      if (subtitles) updatedMeta.subtitles = subtitles;
+      if (tmdb_id !== undefined) updatedMeta.tmdb_id = tmdb_id;
+      if (release_date) updatedMeta.release_date = release_date;
+      if (rating !== undefined) updatedMeta.rating = rating;
+      if (genres) updatedMeta.genres = genres;
+      if (runtime !== undefined) updatedMeta.runtime = runtime;
+      if (tagline) updatedMeta.tagline = tagline;
+      if (imdb_id) updatedMeta.imdb_id = imdb_id;
+      if (original_language) updatedMeta.original_language = original_language;
+      if (source_type) updatedMeta.source_type = source_type;
+      if (release_name) updatedMeta.release_name = release_name;
+      if (series_name) updatedMeta.series_name = series_name;
+      if (season_number !== undefined) updatedMeta.season_number = season_number;
+      if (episode_number !== undefined) updatedMeta.episode_number = episode_number;
+      if (episode_title) updatedMeta.episode_title = episode_title;
+
       await supabaseAdmin
         .from('ingest_jobs')
         .update({
           status: 'completed',
           finished_at: new Date().toISOString(),
-          metadata: {
-            ...(job as any).metadata,
-            blob_url,
-            assigned_quality: assigned_quality || job.assigned_quality,
-            hls_playlist: hls_playlist || null,
-            title, description, poster_url, subtitles,
-            tmdb_id, release_date, rating, genres, runtime,
-            tagline, imdb_id, original_language, source_type, release_name,
-            series_name, season_number, episode_number, episode_title,
-          },
+          metadata: updatedMeta,
         })
         .eq('id', job_id);
 
       // Check if ALL jobs in this group are now completed
       const { data: groupJobs } = await supabaseAdmin
         .from('ingest_jobs')
-        .select('id, status, metadata, assigned_quality, hash')
+        .select('id, status, metadata, assigned_quality, hash, movie_name')
         .eq('ingest_group_id', groupId);
 
       if (!groupJobs) {
@@ -184,16 +203,19 @@ export async function POST(req: NextRequest) {
       const hlsMasterPlaylist = null;
 
       // Get shared metadata from the first job
+      // Note: metadata keys use camelCase (posterUrl) as stored by the submit endpoint
       const firstMeta = (groupJobs[0] as any).metadata || {};
+      // Also get the movie_name from the first job row for the title
+      const firstJobRow = groupJobs[0] as any;
 
       const { data: movie, error: movieError } = await supabaseAdmin
         .from('movies')
         .insert({
-          title:              (firstMeta.title || effectiveTitle).trim(),
-          description:        (firstMeta.description || description)?.trim() ?? null,
+          title:              (firstMeta.title || effectiveTitle || firstJobRow.movie_name || 'Untitled').trim(),
+          description:        (firstMeta.description || description)?.trim() || null,
           blob_url:           primaryBlobUrl,
           blob_name:          primaryBlobName,
-          poster_url:         firstMeta.poster_url || poster_url || null,
+          poster_url:         firstMeta.posterUrl || firstMeta.poster_url || poster_url || null,
           file_size:          totalFileSize,
           format,
           quality:            null,  // multi-quality — individual qualities are in variants
@@ -206,7 +228,7 @@ export async function POST(req: NextRequest) {
           uploaded_by:        user.id,
           quality_variants:   qualityVariants,
           hls_master_playlist: hlsMasterPlaylist,
-          // TMDB metadata
+          // TMDB metadata — check both camelCase and snake_case keys
           tmdb_id:            firstMeta.tmdb_id ?? tmdb_id ?? null,
           release_date:       firstMeta.release_date ?? release_date ?? null,
           rating:             firstMeta.rating ?? rating ?? null,
