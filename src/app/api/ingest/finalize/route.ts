@@ -246,6 +246,13 @@ export async function POST(req: NextRequest) {
             updatePayload.blob_name = result.blobName;
           }
 
+          // Update quality tag to the highest available
+          const allQualities = newVariants.map(v => v.quality);
+          const highestQuality = allQualities.sort((a, b) => (QUALITY_RANK[b] ?? 0) - (QUALITY_RANK[a] ?? 0))[0];
+          if (highestQuality) {
+            updatePayload.quality = highestQuality;
+          }
+
           // ── Generate HLS master playlist if 2+ variants have HLS ──────
           const hlsVariantCount = newVariants.filter(v => v.hls_playlist).length;
           if (hlsVariantCount >= 2) {
@@ -317,6 +324,11 @@ export async function POST(req: NextRequest) {
         hlsMasterPlaylist = await generateAndUploadMasterPlaylist(qualityVariants, masterBlobName);
       }
 
+      // Determine highest quality from available variants
+      const highestQuality = qualityVariants
+        .map(v => v.quality)
+        .sort((a, b) => (QUALITY_RANK[b] ?? 0) - (QUALITY_RANK[a] ?? 0))[0] || null;
+
       const { data: movie, error: movieError } = await supabaseAdmin
         .from('movies')
         .insert({
@@ -327,7 +339,7 @@ export async function POST(req: NextRequest) {
           poster_url:         firstMeta.posterUrl || firstMeta.poster_url || poster_url || null,
           file_size:          totalFileSize,
           format,
-          quality:            null,
+          quality:            highestQuality,
           duration:           null,
           subtitles:          firstMeta.subtitles || subtitles || [],
           ingest_method:      'torrent',

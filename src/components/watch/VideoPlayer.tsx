@@ -328,7 +328,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     }, { once: true });
   }, [activePlayer]);
 
-  // ── Auto quality (non-HLS): only downgrade on stalls, never auto-upgrade ──
+  // ── Auto quality (non-HLS): downgrade on stalls, upgrade when stable ───────
   useEffect(() => {
     if (selectedQuality !== 'auto' || hlsActive || !qualityVariants || qualityVariants.length < 2) return;
 
@@ -339,10 +339,14 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       (a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0),
     );
 
-    // Initialize to highest quality
+    // Initialize — the video already has src set from the prop (highest quality).
+    // Just register which quality we're on without triggering a switch.
     if (!autoQualityRef.current) {
-      autoQualityRef.current = sorted[0].quality;
-      setCurrentQualityLabel(`Auto (${sorted[0].quality})`);
+      // Figure out which variant matches the currently loaded src
+      const currentSrc = active.currentSrc || active.src || '';
+      const matchingVariant = sorted.find(v => currentSrc.includes(v.url.split('?')[0]));
+      autoQualityRef.current = matchingVariant?.quality || sorted[0].quality;
+      setCurrentQualityLabel(`Auto (${autoQualityRef.current})`);
     }
 
     const currentIdx = () => sorted.findIndex(v => v.quality === autoQualityRef.current);
