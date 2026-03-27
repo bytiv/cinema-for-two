@@ -4,9 +4,10 @@
  * Called by the client after a torrent job reaches "Ready".
  *
  * For SINGLE-QUALITY (no group): Creates the movie row immediately (legacy behavior).
- * For MULTI-QUALITY (grouped):   Only creates the movie row once ALL jobs in the
- *                                 group are "Ready" (completed). If some jobs are
- *                                 still running, returns { waiting: true }.
+ * For MULTI-QUALITY (grouped):   Creates the movie as soon as the FIRST quality
+ *                                finishes (so it's immediately watchable). When the
+ *                                second quality completes, updates the existing movie
+ *                                row to add the new variant.
  *
  * Body: {
  *   job_id:           string
@@ -34,6 +35,45 @@ const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
+
+const QUALITY_RANK: Record<string, number> = { '480p': 0, '720p': 1, '1080p': 2, '4K': 3 };
+
+/** Build a QualityVariant from a completed job's metadata */
+async function buildVariant(
+  meta: Record<string, any>,
+  assignedQuality: string,
+  containerName: string,
+): Promise<{ variant: QualityVariant; blobName: string; blobUrl: string; fileSize: number } | null> {
+  const gjBlobUrl = meta.blob_url;
+  if (!gjBlobUrl) return null;
+
+  const afterContainer = gjBlobUrl.split(`/${containerName}/`)[1];
+  if (!afterContainer) return null;
+
+  const gjBlobName = afterContainer;
+  const gjQuality  = meta.assigned_quality || assignedQuality;
+
+  let fileSize = 0;
+  try {
+    const sasUrl = generateReadSasUrl(CONTAINERS.movies, gjBlobName, 1);
+    const head = await fetch(sasUrl, { method: 'HEAD' });
+    const cl = parseInt(head.headers.get('content-length') ?? '0', 10);
+    if (!isNaN(cl)) fileSize = cl;
+  } catch {}
+
+  return {
+    variant: {
+      quality: gjQuality,
+      blob_name: gjBlobName,
+      blob_url: gjBlobUrl,
+      file_size: fileSize,
+      hls_playlist: meta.hls_playlist || null,
+    },
+    blobName: gjBlobName,
+    blobUrl: gjBlobUrl,
+    fileSize,
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -76,15 +116,13 @@ export async function POST(req: NextRequest) {
     // ── Multi-quality grouped path ────────────────────────────────────────
     if (groupId) {
       // Update this job's metadata with its blob_url and quality info
-      // ONLY update fields that are actually provided — don't overwrite existing metadata with undefined
       const existingMeta = (job as any).metadata || {};
-      const updatedMeta = {
+      const updatedMeta: Record<string, any> = {
         ...existingMeta,
         blob_url,
         assigned_quality: assigned_quality || job.assigned_quality || existingMeta.assigned_quality,
         hls_playlist: hls_playlist || existingMeta.hls_playlist || null,
       };
-      // Only overwrite metadata fields if they were actually sent (not undefined)
       if (title) updatedMeta.title = title;
       if (description !== undefined) updatedMeta.description = description;
       if (poster_url) updatedMeta.poster_url = poster_url;
@@ -113,7 +151,7 @@ export async function POST(req: NextRequest) {
         })
         .eq('id', job_id);
 
-      // Check if ALL jobs in this group are now completed
+      // Fetch all jobs in this group
       const { data: groupJobs } = await supabaseAdmin
         .from('ingest_jobs')
         .select('id, status, metadata, assigned_quality, hash, movie_name')
@@ -123,90 +161,93 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to fetch group jobs' }, { status: 500 });
       }
 
-      const allCompleted = groupJobs.every(j => j.status === 'completed');
-      const anyFailed    = groupJobs.some(j => j.status === 'failed' || j.status === 'cancelled');
+      const completedJobs = groupJobs.filter(j => j.status === 'completed');
+      const containerName = process.env.AZURE_STORAGE_CONTAINER_MOVIES ?? 'movies';
 
-      if (!allCompleted) {
-        // Some jobs still running — don't create movie yet
-        return NextResponse.json({
-          waiting: true,
-          completed: groupJobs.filter(j => j.status === 'completed').length,
-          total: groupJobs.length,
-          failed: anyFailed,
-        });
-      }
-
-      // All done! Check if movie already exists for this group
+      // ── Check if a movie already exists for this group ────────────────
       const { data: existingMovie } = await supabaseAdmin
         .from('movies')
-        .select('id')
+        .select('id, quality_variants, file_size, blob_url, blob_name')
         .eq('ingest_group_id', groupId)
         .maybeSingle();
 
       if (existingMovie) {
+        // Movie already exists — add this job's variant if not already present
+        const existingVariants: QualityVariant[] = existingMovie.quality_variants || [];
+        const thisQuality = updatedMeta.assigned_quality || assigned_quality || job.assigned_quality;
+
+        // Check if this quality is already in the variants
+        const alreadyHas = existingVariants.some(v => v.quality === thisQuality);
+        if (alreadyHas) {
+          return NextResponse.json({ movie_id: existingMovie.id });
+        }
+
+        // Build the new variant from this job
+        const result = await buildVariant(updatedMeta, thisQuality, containerName);
+        if (result) {
+          const newVariants = [...existingVariants, result.variant];
+          const newFileSize = (existingMovie.file_size || 0) + result.fileSize;
+
+          // Check if the new variant is higher quality — if so, update primary blob
+          const newRank = QUALITY_RANK[thisQuality] ?? 0;
+          const currentPrimaryQuality = existingVariants[0]?.quality;
+          const currentRank = QUALITY_RANK[currentPrimaryQuality] ?? 0;
+
+          const updatePayload: Record<string, any> = {
+            quality_variants: newVariants,
+            file_size: newFileSize,
+          };
+
+          // If the new variant is higher quality, make it the primary
+          if (newRank > currentRank) {
+            updatePayload.blob_url = result.blobUrl;
+            updatePayload.blob_name = result.blobName;
+          }
+
+          await supabaseAdmin
+            .from('movies')
+            .update(updatePayload)
+            .eq('id', existingMovie.id);
+
+          console.log(`[finalize] Added ${thisQuality} variant to existing movie ${existingMovie.id}`);
+        }
+
         return NextResponse.json({ movie_id: existingMovie.id });
       }
 
-      // Build quality_variants array from all completed jobs
-      const containerName = process.env.AZURE_STORAGE_CONTAINER_MOVIES ?? 'movies';
+      // ── No movie yet — create one with whatever variants are completed ──
       const qualityVariants: QualityVariant[] = [];
-
-      // Use the first job's data for shared metadata (title, poster, etc.)
       let primaryBlobUrl = '';
       let primaryBlobName = '';
       let primaryInfoHash = '';
       let totalFileSize = 0;
 
-      for (const gj of groupJobs) {
+      for (const gj of completedJobs) {
         const meta = (gj as any).metadata || {};
-        const gjBlobUrl = meta.blob_url;
-        if (!gjBlobUrl) continue;
+        const gjQuality = meta.assigned_quality || gj.assigned_quality || quality;
+        const result = await buildVariant(meta, gjQuality, containerName);
+        if (!result) continue;
 
-        const afterContainer = gjBlobUrl.split(`/${containerName}/`)[1];
-        if (!afterContainer) continue;
-
-        const gjBlobName = afterContainer;
-        const gjQuality  = meta.assigned_quality || gj.assigned_quality || quality;
-
-        // Probe file size
-        let fileSize = 0;
-        try {
-          const sasUrl = generateReadSasUrl(CONTAINERS.movies, gjBlobName, 1);
-          const head = await fetch(sasUrl, { method: 'HEAD' });
-          const cl = parseInt(head.headers.get('content-length') ?? '0', 10);
-          if (!isNaN(cl)) fileSize = cl;
-        } catch {}
-
-        qualityVariants.push({
-          quality: gjQuality,
-          blob_name: gjBlobName,
-          blob_url: gjBlobUrl,
-          file_size: fileSize,
-          hls_playlist: meta.hls_playlist || null,
-        });
-
-        totalFileSize += fileSize;
+        qualityVariants.push(result.variant);
+        totalFileSize += result.fileSize;
 
         // Use highest quality as the primary/fallback
         if (!primaryBlobUrl || gjQuality === '1080p' || gjQuality === '4K') {
-          primaryBlobUrl  = gjBlobUrl;
-          primaryBlobName = gjBlobName;
+          primaryBlobUrl  = result.blobUrl;
+          primaryBlobName = result.blobName;
           primaryInfoHash = gj.hash;
         }
+      }
+
+      if (!primaryBlobUrl) {
+        return NextResponse.json({ error: 'No completed variants found' }, { status: 500 });
       }
 
       const ext    = primaryBlobName.split('.').pop()?.toLowerCase() ?? 'mp4';
       const format = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(ext) ? ext : 'mp4';
 
-      // Determine HLS master playlist (will be set by a later stage when HLS generation is implemented)
-      // For now, set to null — Stage 3 will populate this
-      const hlsMasterPlaylist = null;
-
-      // Get shared metadata from the first job
-      // Note: metadata keys use camelCase (posterUrl) as stored by the submit endpoint
-      const firstMeta = (groupJobs[0] as any).metadata || {};
-      // Also get the movie_name from the first job row for the title
-      const firstJobRow = groupJobs[0] as any;
+      const firstMeta = (completedJobs[0] as any).metadata || {};
+      const firstJobRow = completedJobs[0] as any;
 
       const { data: movie, error: movieError } = await supabaseAdmin
         .from('movies')
@@ -218,17 +259,17 @@ export async function POST(req: NextRequest) {
           poster_url:         firstMeta.posterUrl || firstMeta.poster_url || poster_url || null,
           file_size:          totalFileSize,
           format,
-          quality:            null,  // multi-quality — individual qualities are in variants
+          quality:            null,
           duration:           null,
           subtitles:          firstMeta.subtitles || subtitles || [],
           ingest_method:      'torrent',
           info_hash:          primaryInfoHash,
-          ingest_job_id:      job_id,  // reference to the last-completing job
+          ingest_job_id:      job_id,
           ingest_group_id:    groupId,
           uploaded_by:        user.id,
           quality_variants:   qualityVariants,
-          hls_master_playlist: hlsMasterPlaylist,
-          // TMDB metadata — check both camelCase and snake_case keys
+          hls_master_playlist: null,
+          // TMDB metadata
           tmdb_id:            firstMeta.tmdb_id ?? tmdb_id ?? null,
           release_date:       firstMeta.release_date ?? release_date ?? null,
           rating:             firstMeta.rating ?? rating ?? null,
@@ -265,12 +306,14 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      const remainingCount = groupJobs.length - completedJobs.length;
+      console.log(`[finalize] Created movie ${movie.id} with ${completedJobs.length} variant(s), ${remainingCount} still pending`);
+
       return NextResponse.json({ movie_id: movie.id });
     }
 
     // ── Single-quality path (legacy behavior) ─────────────────────────────
 
-    // Derive blob_name from blob_url
     const containerName = process.env.AZURE_STORAGE_CONTAINER_MOVIES ?? 'movies';
     const afterContainer = blob_url.split(`/${containerName}/`)[1];
     if (!afterContainer) {
@@ -281,7 +324,6 @@ export async function POST(req: NextRequest) {
     const ext      = blobName.split('.').pop()?.toLowerCase() ?? 'mp4';
     const format   = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'm4v', 'ts'].includes(ext) ? ext : 'mp4';
 
-    // Probe file size via SAS URL
     let fileSize = 0;
     try {
       const sasUrl = generateReadSasUrl(CONTAINERS.movies, blobName, 1);
@@ -290,7 +332,6 @@ export async function POST(req: NextRequest) {
       if (!isNaN(cl)) fileSize = cl;
     } catch {}
 
-    // Guard against duplicate inserts
     const { data: existingMovie } = await supabaseAdmin
       .from('movies')
       .select('id')
@@ -301,7 +342,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ movie_id: existingMovie.id });
     }
 
-    // Build single-quality variant if HLS was enabled for single quality
     let qualityVariants: QualityVariant[] | null = null;
     if (hls_playlist && assigned_quality) {
       qualityVariants = [{
@@ -313,7 +353,6 @@ export async function POST(req: NextRequest) {
       }];
     }
 
-    // Insert movie row
     const { data: movie, error: movieError } = await supabaseAdmin
       .from('movies')
       .insert({
@@ -332,7 +371,7 @@ export async function POST(req: NextRequest) {
         ingest_job_id:      job_id,
         uploaded_by:        user.id,
         quality_variants:   qualityVariants,
-        hls_master_playlist: null,  // will be set by HLS generation in Stage 3
+        hls_master_playlist: null,
         // TMDB metadata
         tmdb_id:            tmdb_id ?? null,
         release_date:       release_date ?? null,

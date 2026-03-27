@@ -789,6 +789,9 @@ export default function UploadPage() {
 
   // ─────────────────────────────────────────────────────────
   // Grouped job finalize — called when a grouped job hits Ready
+  // Creates the movie on the FIRST quality completion so it's
+  // immediately watchable. When the second quality finishes,
+  // the variant gets added to the existing movie row.
   // ─────────────────────────────────────────────────────────
   async function _tryFinalizeGroup(
     jobId: string,
@@ -823,18 +826,11 @@ export default function UploadPage() {
 
       const data = await res.json();
 
-      if (data.waiting) {
-        // Not all jobs done yet — finalize will be called again when the next job finishes
-        console.log(`[finalize-group] Waiting: ${data.completed}/${data.total} jobs complete`);
-        return;
-      }
-
       if (data.movie_id) {
-        // All jobs done, movie created! Update all jobs in this group with the movie ID
-        console.log(`[finalize-group] Movie created: ${data.movie_id}`);
+        // Movie created or updated — set movieId on ALL jobs in this group
+        console.log(`[finalize-group] Movie ready: ${data.movie_id} (quality: ${assignedQuality || 'unknown'})`);
         setActiveJobs((prev) =>
           prev.map((aj) => {
-            // Check if this job belongs to the same group by checking if its job has the same group ID
             const jobData = aj.job as any;
             if (jobData?.ingest_group_id === groupId || aj.jobId === jobId) {
               return { ...aj, movieId: data.movie_id };
