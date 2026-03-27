@@ -63,7 +63,8 @@ function getFullscreenElement() {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function VideoPlayer({ src, subtitles = [], initialTime, onPlaybackEvent, externalControl, qualityVariants, hlsMasterUrl, className }: VideoPlayerProps) {
-  const videoRef       = useRef<HTMLVideoElement>(null);
+  const videoRef       = useRef<HTMLVideoElement>(null);  // Player A
+  const videoRefB      = useRef<HTMLVideoElement>(null);  // Player B (standby for quality switching)
   const containerRef   = useRef<HTMLDivElement>(null);
   const progressRef    = useRef<HTMLDivElement>(null);
   const hideTimeoutRef = useRef<NodeJS.Timeout>();
@@ -244,177 +245,154 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
   }, [hlsMasterUrl]); // only re-run if the master URL changes
 
-  // ── Auto quality switching (non-HLS) ──────────────────────────────────────
+  // ── Dual-video quality switching ────────────────────────────────────────────
+  // Two stacked <video> elements. The "active" one plays while the "standby"
+  // one preloads the new quality in the background. Once ready, we swap them.
+  const switchingRef   = useRef(false);
+  const [activePlayer, setActivePlayer] = useState<'a' | 'b'>('a'); // which video is currently visible
+  // Auto quality refs
   const autoQualityRef = useRef<string | null>(null);
   const stallCountRef  = useRef(0);
   const stableCountRef = useRef(0);
-  const switchingRef   = useRef(false); // prevents re-entrant switches
 
-  /** Smoothly switch MP4 src: preload new source at the right time, then swap */
-  const smoothSrcSwitch = useCallback((newUrl: string, targetTime: number, wasPlaying: boolean, onDone?: () => void) => {
-    const video = videoRef.current;
-    if (!video || switchingRef.current) return;
+  /**
+   * Seamlessly switch to a new MP4 URL using the dual-video technique.
+   * The standby video loads + seeks in the background while the active one
+   * keeps playing. Once ready, we swap visibility.
+   */
+  const dualVideoSwitch = useCallback((newUrl: string, label: string, onDone?: () => void) => {
+    if (switchingRef.current) return;
+    const active  = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    const standby = activePlayer === 'a' ? videoRefB.current : videoRef.current;
+    const nextPlayer = activePlayer === 'a' ? 'b' as const : 'a' as const;
+    if (!active || !standby) return;
 
     switchingRef.current = true;
-    setIsWaiting(true);
 
-    // Create a hidden preload element
-    const preload = document.createElement('video');
-    preload.preload = 'auto';
-    preload.muted = true;
-    preload.playsInline = true;
-    preload.style.display = 'none';
-    document.body.appendChild(preload);
+    const targetTime = active.currentTime;
+    const wasPlaying = !active.paused;
+    const vol = active.volume;
+    const muted = active.muted;
 
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      switchingRef.current = false;
-      try { preload.pause(); preload.removeAttribute('src'); preload.load(); } catch {}
-      try { document.body.removeChild(preload); } catch {}
-    };
+    // Prepare standby
+    standby.muted = true; // mute during preload to avoid double audio
+    standby.preload = 'auto';
+    standby.src = newUrl;
+    standby.currentTime = targetTime;
 
-    // Timeout fallback — if preload takes too long, do a hard swap
-    const timeout = setTimeout(() => {
-      cleanup();
-      seekTarget.current = targetTime;
-      isSeeking.current = true;
-      video.src = newUrl;
-      video.currentTime = targetTime;
-      setCurrentTime(targetTime);
-      setIsWaiting(false);
-      if (wasPlaying) video.play().catch(() => {});
-      onDone?.();
-    }, 5000);
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
 
-    const onReady = () => {
-      clearTimeout(timeout);
-      // Preloaded video is ready at the right time — do the swap
-      const currentMuted = video.muted;
-      const currentVolume = video.volume;
+      // Sync time precisely right before swap
+      standby.currentTime = active.currentTime;
+      standby.volume = vol;
+      standby.muted = muted;
 
-      seekTarget.current = targetTime;
-      isSeeking.current = true;
-      video.src = newUrl;
-      video.currentTime = targetTime;
-      video.muted = currentMuted;
-      video.volume = currentVolume;
+      // Start playback on standby before swapping so there's no gap
+      if (wasPlaying) {
+        standby.play().catch(() => {});
+      }
 
-      // Wait for the main video to be ready before showing
-      const onMainReady = () => {
-        video.removeEventListener('canplay', onMainReady);
-        setCurrentTime(targetTime);
-        setIsWaiting(false);
-        if (wasPlaying) video.play().catch(() => {});
-        cleanup();
-        onDone?.();
-      };
-      video.addEventListener('canplay', onMainReady, { once: true });
-      // Fallback if canplay doesn't fire quickly
+      // Swap: bring standby to front
+      setActivePlayer(nextPlayer);
+
+      // Pause the old active (now hidden) after a brief delay
       setTimeout(() => {
-        video.removeEventListener('canplay', onMainReady);
-        setCurrentTime(targetTime);
-        setIsWaiting(false);
-        if (wasPlaying) video.play().catch(() => {});
-        cleanup();
+        active.pause();
+        switchingRef.current = false;
         onDone?.();
-      }, 2000);
+      }, 150);
     };
 
-    preload.addEventListener('canplay', onReady, { once: true });
-    preload.addEventListener('error', () => {
+    // Wait for standby to be ready
+    const onCanPlay = () => { clearTimeout(timeout); finish(); };
+    standby.addEventListener('canplay', onCanPlay, { once: true });
+
+    // Timeout fallback
+    const timeout = setTimeout(() => {
+      standby.removeEventListener('canplay', onCanPlay);
+      finish();
+    }, 8000);
+
+    standby.addEventListener('error', () => {
       clearTimeout(timeout);
-      cleanup();
-      // Fallback to hard swap
-      video.src = newUrl;
-      video.currentTime = targetTime;
-      setIsWaiting(false);
-      if (wasPlaying) video.play().catch(() => {});
+      standby.removeEventListener('canplay', onCanPlay);
+      switchingRef.current = false;
+      // Fallback: hard swap on the active element
+      active.src = newUrl;
+      active.currentTime = targetTime;
+      if (wasPlaying) active.play().catch(() => {});
       onDone?.();
     }, { once: true });
+  }, [activePlayer]);
 
-    preload.src = newUrl;
-    preload.currentTime = targetTime;
-  }, []);
-
+  // ── Auto quality (non-HLS): only downgrade on stalls, never auto-upgrade ──
   useEffect(() => {
     if (selectedQuality !== 'auto' || hlsActive || !qualityVariants || qualityVariants.length < 2) return;
 
-    const video = videoRef.current;
-    if (!video) return;
+    const active = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!active) return;
 
     const sorted = [...qualityVariants].sort(
       (a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0),
     );
 
-    // Initialize to highest quality if not set
+    // Initialize to highest quality
     if (!autoQualityRef.current) {
       autoQualityRef.current = sorted[0].quality;
       setCurrentQualityLabel(`Auto (${sorted[0].quality})`);
-      const best = sorted[0];
-      if (video.src !== best.url && !video.currentSrc.includes(best.url.split('?')[0])) {
-        const t = video.currentTime;
-        const playing = !video.paused;
-        smoothSrcSwitch(best.url, t, playing);
-      }
     }
 
     const currentIdx = () => sorted.findIndex(v => v.quality === autoQualityRef.current);
 
-    const switchToQuality = (newQuality: string) => {
-      if (newQuality === autoQualityRef.current || switchingRef.current) return;
-      const variant = sorted.find(v => v.quality === newQuality);
-      if (!variant) return;
-
-      autoQualityRef.current = newQuality;
-      setCurrentQualityLabel(`Auto (${newQuality})`);
-      smoothSrcSwitch(variant.url, video.currentTime, !video.paused);
-    };
-
     const onWaiting = () => {
-      if (switchingRef.current) return; // don't count stalls during a switch
+      if (switchingRef.current) return;
       stallCountRef.current++;
       stableCountRef.current = 0;
+      // After 2 stalls, downgrade
       if (stallCountRef.current >= 2) {
         const idx = currentIdx();
         if (idx < sorted.length - 1) {
-          console.log(`[auto-quality] Downgrading: ${autoQualityRef.current} → ${sorted[idx + 1].quality}`);
-          switchToQuality(sorted[idx + 1].quality);
+          const nextQ = sorted[idx + 1].quality;
+          console.log(`[auto-quality] Downgrading: ${autoQualityRef.current} → ${nextQ}`);
+          autoQualityRef.current = nextQ;
+          setCurrentQualityLabel(`Auto (${nextQ})`);
+          dualVideoSwitch(sorted[idx + 1].url, nextQ);
           stallCountRef.current = 0;
         }
       }
     };
 
+    // Every 10s of smooth playback, consider upgrading
     const stabilityCheck = setInterval(() => {
-      if (video.paused || video.readyState < 3 || switchingRef.current) return;
+      if (active.paused || active.readyState < 3 || switchingRef.current) return;
       stableCountRef.current++;
+      // After 30s of smooth playback (3 checks), try upgrading
       if (stableCountRef.current >= 3) {
         const idx = currentIdx();
         if (idx > 0) {
-          console.log(`[auto-quality] Upgrading: ${autoQualityRef.current} → ${sorted[idx - 1].quality}`);
-          switchToQuality(sorted[idx - 1].quality);
+          const nextQ = sorted[idx - 1].quality;
+          console.log(`[auto-quality] Upgrading: ${autoQualityRef.current} → ${nextQ}`);
+          autoQualityRef.current = nextQ;
+          setCurrentQualityLabel(`Auto (${nextQ})`);
+          dualVideoSwitch(sorted[idx - 1].url, nextQ);
           stableCountRef.current = 0;
           stallCountRef.current = 0;
         }
       }
     }, 10_000);
 
-    video.addEventListener('waiting', onWaiting);
+    active.addEventListener('waiting', onWaiting);
     return () => {
-      video.removeEventListener('waiting', onWaiting);
+      active.removeEventListener('waiting', onWaiting);
       clearInterval(stabilityCheck);
     };
-  }, [selectedQuality, hlsActive, qualityVariants, smoothSrcSwitch]);
+  }, [selectedQuality, hlsActive, qualityVariants, dualVideoSwitch, activePlayer]);
 
-  // ── Quality switching ──────────────────────────────────────────────────────
+  // ── Manual quality switching ───────────────────────────────────────────────
   const handleQualitySelect = useCallback((quality: string) => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const savedTime = video.currentTime;
-    const wasPlaying = !video.paused;
-
     setSelectedQuality(quality);
     setShowQualityMenu(false);
 
@@ -434,7 +412,7 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       }
     } else if (qualityVariants) {
       if (quality === 'auto') {
-        autoQualityRef.current = null;
+        // Reset auto state — start at highest
         stallCountRef.current = 0;
         stableCountRef.current = 0;
         const sorted = [...qualityVariants].sort(
@@ -444,22 +422,22 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         if (best) {
           autoQualityRef.current = best.quality;
           setCurrentQualityLabel(`Auto (${best.quality})`);
-          smoothSrcSwitch(best.url, savedTime, wasPlaying);
+          dualVideoSwitch(best.url, best.quality);
         }
       } else {
         autoQualityRef.current = null;
+        setCurrentQualityLabel(quality);
         const variant = qualityVariants.find(v => v.quality === quality);
         if (variant) {
-          setCurrentQualityLabel(quality);
-          smoothSrcSwitch(variant.url, savedTime, wasPlaying);
+          dualVideoSwitch(variant.url, quality);
         }
       }
     }
-  }, [hlsActive, qualityVariants, smoothSrcSwitch]);
+  }, [hlsActive, qualityVariants, dualVideoSwitch]);
 
   // ── Seeking/seeked events ──────────────────────────────────────────────────
   useEffect(() => {
-    const video = videoRef.current;
+    const video = activePlayer === 'a' ? videoRef.current : videoRefB.current;
     if (!video) return;
     const onSeeking = () => { isSeeking.current = true; };
     const onSeeked  = () => {
@@ -473,12 +451,13 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       video.removeEventListener('seeking', onSeeking);
       video.removeEventListener('seeked',  onSeeked);
     };
-  }, []);
+  }, [activePlayer]);
 
   useEffect(() => {
-    if (!videoRef.current) return;
+    const video = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!video) return;
     const sync = () => {
-      const tracks = videoRef.current?.textTracks;
+      const tracks = video?.textTracks;
       if (!tracks) return;
       for (let i = 0; i < tracks.length; i++)
         tracks[i].mode = tracks[i].language === activeSubtitle ? 'hidden' : 'disabled';
@@ -489,9 +468,10 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   }, [activeSubtitle]);
 
   useEffect(() => {
-    if (!videoRef.current || !activeSubtitle) { setCurrentCue(null); return; }
+    const video = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!video || !activeSubtitle) { setCurrentCue(null); return; }
     const update = () => {
-      const tracks = videoRef.current?.textTracks;
+      const tracks = video?.textTracks;
       if (!tracks) return;
       for (let i = 0; i < tracks.length; i++) {
         if (tracks[i].language === activeSubtitle && tracks[i].activeCues?.length) {
@@ -503,17 +483,17 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
     const interval = setInterval(update, 100);
     return () => clearInterval(interval);
-  }, [activeSubtitle]);
+  }, [activeSubtitle, activePlayer]);
 
   // ── External control ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!externalControl || !videoRef.current) return;
+    const v = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!externalControl || !v) return;
     const fingerprint = `${externalControl.type}:${externalControl.timestamp.toFixed(2)}`;
     if (lastExternalControl.current === fingerprint) return;
     lastExternalControl.current = fingerprint;
 
     isExternalRef.current = true;
-    const v = videoRef.current;
     seekTarget.current = externalControl.timestamp;
     isSeeking.current = true;
 
@@ -536,12 +516,13 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
         break;
     }
     setTimeout(() => { isExternalRef.current = false; }, 200);
-  }, [externalControl]);
+  }, [externalControl, activePlayer]);
 
+  // ── Waiting/buffering events (track on the active player) ─────────────────
   useEffect(() => {
-    const video = videoRef.current;
+    const video = activePlayer === 'a' ? videoRef.current : videoRefB.current;
     if (!video) return;
-    const onWaiting = () => setIsWaiting(true);
+    const onWaiting = () => { if (!switchingRef.current) setIsWaiting(true); };
     const onPlaying = () => setIsWaiting(false);
     const onCanPlay = () => setIsWaiting(false);
     video.addEventListener('waiting', onWaiting);
@@ -552,26 +533,28 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('canplay', onCanPlay);
     };
-  }, []);
+  }, [activePlayer]);
 
   const emitEvent = useCallback((type: 'play' | 'pause' | 'seek', timestamp: number) => {
     if (!isExternalRef.current && onPlaybackEvent) onPlaybackEvent({ type, timestamp });
   }, [onPlaybackEvent]);
 
   const togglePlay = () => {
-    if (!videoRef.current) return;
-    if (isPlaying) { videoRef.current.pause(); setIsPlaying(false); emitEvent('pause', videoRef.current.currentTime); }
-    else { videoRef.current.play().catch(() => {}); setIsPlaying(true); emitEvent('play', videoRef.current.currentTime); }
+    const v = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!v) return;
+    if (isPlaying) { v.pause(); setIsPlaying(false); emitEvent('pause', v.currentTime); }
+    else { v.play().catch(() => {}); setIsPlaying(true); emitEvent('play', v.currentTime); }
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-    if (!progressRef.current || !videoRef.current) return;
+    const v = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!progressRef.current || !v) return;
     const rect = progressRef.current.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const time = Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration));
     seekTarget.current = time;
     isSeeking.current = true;
-    videoRef.current.currentTime = time;
+    v.currentTime = time;
     setCurrentTime(time);
     emitEvent('seek', time);
   };
@@ -586,29 +569,33 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   };
 
   const skip = (s: number) => {
-    if (!videoRef.current) return;
-    const t = Math.max(0, Math.min(duration, videoRef.current.currentTime + s));
+    const v = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!v) return;
+    const t = Math.max(0, Math.min(duration, v.currentTime + s));
     seekTarget.current = t;
     isSeeking.current = true;
-    videoRef.current.currentTime = t;
+    v.currentTime = t;
     setCurrentTime(t);
     emitEvent('seek', t);
   };
 
   const toggleMute = () => {
-    if (!videoRef.current) return;
-    videoRef.current.muted = !isMuted;
+    const v = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (!v) return;
+    v.muted = !isMuted;
     setIsMuted(!isMuted);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
-    if (videoRef.current) { videoRef.current.volume = val; videoRef.current.muted = val === 0; }
+    const v = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    if (v) { v.volume = val; v.muted = val === 0; }
     setVolume(val); setIsMuted(val === 0);
   };
 
   const toggleFullscreen = () => {
-    const target = isMobile && videoRef.current ? videoRef.current : containerRef.current!;
+    const activeVideo = activePlayer === 'a' ? videoRef.current : videoRefB.current;
+    const target = isMobile && activeVideo ? activeVideo : containerRef.current!;
     if (!getFullscreenElement()) { requestFullscreen(target); }
     else { exitFullscreen(); }
   };
@@ -655,8 +642,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     return () => window.removeEventListener('keydown', handleKey);
   }, [isPlaying, duration, selectedQuality, showQualitySelector, qualityVariants, handleQualitySelect]);
 
-  const handleTimeUpdate = useCallback(() => {
-    const video = videoRef.current;
+  const handleTimeUpdate = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
     if (!video) return;
     if (isSeeking.current) return;
     if (seekTarget.current !== null) {
@@ -666,8 +653,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     setCurrentTime(video.currentTime);
   }, []);
 
-  const handleProgress = useCallback(() => {
-    const video = videoRef.current;
+  const handleProgress = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
     if (!video || !video.buffered.length) return;
     const ct = video.currentTime;
     let end = 0;
@@ -700,15 +687,17 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
       onTouchStart={handleTap}
       onClick={() => { setShowSubMenu(false); setShowSubSettings(false); setShowQualityMenu(false); }}
     >
+      {/* Player A */}
       <video
         ref={videoRef}
         src={hlsActive ? undefined : src}
-        className="w-full h-full object-contain"
-        onClick={isMobile ? undefined : togglePlay}
+        className="absolute inset-0 w-full h-full object-contain transition-opacity duration-150"
+        style={{ opacity: activePlayer === 'a' ? 1 : 0, zIndex: activePlayer === 'a' ? 2 : 1 }}
+        onClick={isMobile ? undefined : (activePlayer === 'a' ? togglePlay : undefined)}
         preload="auto"
         playsInline
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={() => {
+        onTimeUpdate={activePlayer === 'a' ? handleTimeUpdate : undefined}
+        onLoadedMetadata={activePlayer === 'a' ? () => {
           if (videoRef.current) {
             setDuration(videoRef.current.duration);
             if (initialTime && initialTime > 0 && !hlsActive) {
@@ -718,13 +707,36 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
               setCurrentTime(initialTime);
             }
           }
-        }}
-        onProgress={handleProgress}
-        onEnded={() => setIsPlaying(false)}
+        } : undefined}
+        onProgress={activePlayer === 'a' ? handleProgress : undefined}
+        onEnded={activePlayer === 'a' ? () => setIsPlaying(false) : undefined}
         crossOrigin="anonymous"
       >
         {subtitles.map((t) => (
           <track key={t.lang} kind="subtitles" src={t.url} srcLang={t.lang} label={t.label} />
+        ))}
+      </video>
+
+      {/* Player B (standby for seamless quality switching) */}
+      <video
+        ref={videoRefB}
+        className="absolute inset-0 w-full h-full object-contain transition-opacity duration-150"
+        style={{ opacity: activePlayer === 'b' ? 1 : 0, zIndex: activePlayer === 'b' ? 2 : 1 }}
+        onClick={isMobile ? undefined : (activePlayer === 'b' ? togglePlay : undefined)}
+        preload="none"
+        playsInline
+        onTimeUpdate={activePlayer === 'b' ? handleTimeUpdate : undefined}
+        onLoadedMetadata={activePlayer === 'b' ? () => {
+          if (videoRefB.current) {
+            setDuration(videoRefB.current.duration);
+          }
+        } : undefined}
+        onProgress={activePlayer === 'b' ? handleProgress : undefined}
+        onEnded={activePlayer === 'b' ? () => setIsPlaying(false) : undefined}
+        crossOrigin="anonymous"
+      >
+        {subtitles.map((t) => (
+          <track key={`b-${t.lang}`} kind="subtitles" src={t.url} srcLang={t.lang} label={t.label} />
         ))}
       </video>
 
