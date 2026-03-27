@@ -97,9 +97,9 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
 
   // ── Quality state ──────────────────────────────────────────────────────────
   const [showQualityMenu, setShowQualityMenu] = useState(false);
-  // 'auto' = HLS adaptive, or a specific quality like '720p', '1080p'
+  // 'auto' = adaptive (HLS or buffer-based), or a specific quality like '720p', '1080p'
   const [selectedQuality, setSelectedQuality]  = useState<string>('auto');
-  // Current quality being played (for display, updated by HLS level switches)
+  // Current quality being played (for display, updated by HLS level switches or auto logic)
   const [currentQualityLabel, setCurrentQualityLabel] = useState<string | null>(null);
   // Whether we're using HLS mode
   const [hlsActive, setHlsActive] = useState(false);
@@ -121,6 +121,19 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
   }, []);
 
   const preloader = useVideoPreloader({ videoRef, src: hlsActive ? '' : src, enabled: !hlsActive });
+
+  // Set initial quality label based on available variants
+  useEffect(() => {
+    if (currentQualityLabel) return; // already set
+    if (qualityVariants && qualityVariants.length > 1) {
+      const sorted = [...qualityVariants].sort(
+        (a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0),
+      );
+      setCurrentQualityLabel(`Auto (${sorted[0].quality})`);
+    } else if (qualityVariants && qualityVariants.length === 1) {
+      setCurrentQualityLabel(qualityVariants[0].quality);
+    }
+  }, [qualityVariants]);
 
   useEffect(() => {
     const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -231,6 +244,169 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     };
   }, [hlsMasterUrl]); // only re-run if the master URL changes
 
+  // ── Auto quality switching (non-HLS) ──────────────────────────────────────
+  const autoQualityRef = useRef<string | null>(null);
+  const stallCountRef  = useRef(0);
+  const stableCountRef = useRef(0);
+  const switchingRef   = useRef(false); // prevents re-entrant switches
+
+  /** Smoothly switch MP4 src: preload new source at the right time, then swap */
+  const smoothSrcSwitch = useCallback((newUrl: string, targetTime: number, wasPlaying: boolean, onDone?: () => void) => {
+    const video = videoRef.current;
+    if (!video || switchingRef.current) return;
+
+    switchingRef.current = true;
+    setIsWaiting(true);
+
+    // Create a hidden preload element
+    const preload = document.createElement('video');
+    preload.preload = 'auto';
+    preload.muted = true;
+    preload.playsInline = true;
+    preload.style.display = 'none';
+    document.body.appendChild(preload);
+
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      switchingRef.current = false;
+      try { preload.pause(); preload.removeAttribute('src'); preload.load(); } catch {}
+      try { document.body.removeChild(preload); } catch {}
+    };
+
+    // Timeout fallback — if preload takes too long, do a hard swap
+    const timeout = setTimeout(() => {
+      cleanup();
+      seekTarget.current = targetTime;
+      isSeeking.current = true;
+      video.src = newUrl;
+      video.currentTime = targetTime;
+      setCurrentTime(targetTime);
+      setIsWaiting(false);
+      if (wasPlaying) video.play().catch(() => {});
+      onDone?.();
+    }, 5000);
+
+    const onReady = () => {
+      clearTimeout(timeout);
+      // Preloaded video is ready at the right time — do the swap
+      const currentMuted = video.muted;
+      const currentVolume = video.volume;
+
+      seekTarget.current = targetTime;
+      isSeeking.current = true;
+      video.src = newUrl;
+      video.currentTime = targetTime;
+      video.muted = currentMuted;
+      video.volume = currentVolume;
+
+      // Wait for the main video to be ready before showing
+      const onMainReady = () => {
+        video.removeEventListener('canplay', onMainReady);
+        setCurrentTime(targetTime);
+        setIsWaiting(false);
+        if (wasPlaying) video.play().catch(() => {});
+        cleanup();
+        onDone?.();
+      };
+      video.addEventListener('canplay', onMainReady, { once: true });
+      // Fallback if canplay doesn't fire quickly
+      setTimeout(() => {
+        video.removeEventListener('canplay', onMainReady);
+        setCurrentTime(targetTime);
+        setIsWaiting(false);
+        if (wasPlaying) video.play().catch(() => {});
+        cleanup();
+        onDone?.();
+      }, 2000);
+    };
+
+    preload.addEventListener('canplay', onReady, { once: true });
+    preload.addEventListener('error', () => {
+      clearTimeout(timeout);
+      cleanup();
+      // Fallback to hard swap
+      video.src = newUrl;
+      video.currentTime = targetTime;
+      setIsWaiting(false);
+      if (wasPlaying) video.play().catch(() => {});
+      onDone?.();
+    }, { once: true });
+
+    preload.src = newUrl;
+    preload.currentTime = targetTime;
+  }, []);
+
+  useEffect(() => {
+    if (selectedQuality !== 'auto' || hlsActive || !qualityVariants || qualityVariants.length < 2) return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    const sorted = [...qualityVariants].sort(
+      (a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0),
+    );
+
+    // Initialize to highest quality if not set
+    if (!autoQualityRef.current) {
+      autoQualityRef.current = sorted[0].quality;
+      setCurrentQualityLabel(`Auto (${sorted[0].quality})`);
+      const best = sorted[0];
+      if (video.src !== best.url && !video.currentSrc.includes(best.url.split('?')[0])) {
+        const t = video.currentTime;
+        const playing = !video.paused;
+        smoothSrcSwitch(best.url, t, playing);
+      }
+    }
+
+    const currentIdx = () => sorted.findIndex(v => v.quality === autoQualityRef.current);
+
+    const switchToQuality = (newQuality: string) => {
+      if (newQuality === autoQualityRef.current || switchingRef.current) return;
+      const variant = sorted.find(v => v.quality === newQuality);
+      if (!variant) return;
+
+      autoQualityRef.current = newQuality;
+      setCurrentQualityLabel(`Auto (${newQuality})`);
+      smoothSrcSwitch(variant.url, video.currentTime, !video.paused);
+    };
+
+    const onWaiting = () => {
+      if (switchingRef.current) return; // don't count stalls during a switch
+      stallCountRef.current++;
+      stableCountRef.current = 0;
+      if (stallCountRef.current >= 2) {
+        const idx = currentIdx();
+        if (idx < sorted.length - 1) {
+          console.log(`[auto-quality] Downgrading: ${autoQualityRef.current} → ${sorted[idx + 1].quality}`);
+          switchToQuality(sorted[idx + 1].quality);
+          stallCountRef.current = 0;
+        }
+      }
+    };
+
+    const stabilityCheck = setInterval(() => {
+      if (video.paused || video.readyState < 3 || switchingRef.current) return;
+      stableCountRef.current++;
+      if (stableCountRef.current >= 3) {
+        const idx = currentIdx();
+        if (idx > 0) {
+          console.log(`[auto-quality] Upgrading: ${autoQualityRef.current} → ${sorted[idx - 1].quality}`);
+          switchToQuality(sorted[idx - 1].quality);
+          stableCountRef.current = 0;
+          stallCountRef.current = 0;
+        }
+      }
+    }, 10_000);
+
+    video.addEventListener('waiting', onWaiting);
+    return () => {
+      video.removeEventListener('waiting', onWaiting);
+      clearInterval(stabilityCheck);
+    };
+  }, [selectedQuality, hlsActive, qualityVariants, smoothSrcSwitch]);
+
   // ── Quality switching ──────────────────────────────────────────────────────
   const handleQualitySelect = useCallback((quality: string) => {
     const video = videoRef.current;
@@ -243,13 +419,11 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
     setShowQualityMenu(false);
 
     if (hlsActive && hlsRef.current) {
-      // HLS mode — switch via hls.js API
       const hls = hlsRef.current;
       if (quality === 'auto') {
-        hls.currentLevel = -1; // auto ABR
+        hls.currentLevel = -1;
         setCurrentQualityLabel('Auto');
       } else {
-        // Find the level matching this quality
         const levels = hls.levels || [];
         const targetHeight = quality === '4K' ? 2160 : quality === '1080p' ? 1080 : quality === '720p' ? 720 : 480;
         const idx = levels.findIndex((l: any) => l.height === targetHeight);
@@ -258,24 +432,30 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
           setCurrentQualityLabel(quality);
         }
       }
-    } else if (qualityVariants && quality !== 'auto') {
-      // Non-HLS multi-quality — swap MP4 src
-      const variant = qualityVariants.find(v => v.quality === quality);
-      if (variant && variant.url !== video.src) {
-        seekTarget.current = savedTime;
-        isSeeking.current = true;
-
-        video.src = variant.url;
-        video.currentTime = savedTime;
-        setCurrentTime(savedTime);
-        setCurrentQualityLabel(quality);
-
-        if (wasPlaying) {
-          video.play().catch(() => {});
+    } else if (qualityVariants) {
+      if (quality === 'auto') {
+        autoQualityRef.current = null;
+        stallCountRef.current = 0;
+        stableCountRef.current = 0;
+        const sorted = [...qualityVariants].sort(
+          (a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0),
+        );
+        const best = sorted[0];
+        if (best) {
+          autoQualityRef.current = best.quality;
+          setCurrentQualityLabel(`Auto (${best.quality})`);
+          smoothSrcSwitch(best.url, savedTime, wasPlaying);
+        }
+      } else {
+        autoQualityRef.current = null;
+        const variant = qualityVariants.find(v => v.quality === quality);
+        if (variant) {
+          setCurrentQualityLabel(quality);
+          smoothSrcSwitch(variant.url, savedTime, wasPlaying);
         }
       }
     }
-  }, [hlsActive, qualityVariants]);
+  }, [hlsActive, qualityVariants, smoothSrcSwitch]);
 
   // ── Seeking/seeked events ──────────────────────────────────────────────────
   useEffect(() => {
@@ -673,8 +853,8 @@ export default function VideoPlayer({ src, subtitles = [], initialTime, onPlayba
                   >
                     <p className="text-[10px] text-cinema-text-dim px-3 pt-1 pb-1.5 uppercase tracking-wider">Quality</p>
 
-                    {/* Auto option — only shown when HLS is active */}
-                    {hasHls && (
+                    {/* Auto option — shown when HLS or 2+ quality variants */}
+                    {(hasHls || hasVariants) && (
                       <button
                         onClick={() => handleQualitySelect('auto')}
                         className={cn(

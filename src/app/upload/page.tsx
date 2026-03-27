@@ -800,11 +800,13 @@ export default function UploadPage() {
     assignedQuality?: string,
     hlsPlaylist?: string,
     streamMeta?: ActiveJob['streamMeta'],
+    jobTitle?: string,
   ) {
     try {
-      // Get the clean title from the active job (strip quality suffix like " [720p]")
+      // Use the title passed in, or try to find from active jobs (may be stale)
       const aj = activeJobs.find(j => j.jobId === jobId);
-      const titleClean = aj?.title?.replace(/\s*\[.*\]$/, '') || 'Untitled';
+      const rawTitle = jobTitle || aj?.title || 'Untitled';
+      const titleClean = rawTitle.replace(/\s*\[.*\]$/, '');
 
       const res = await fetch('/api/ingest/finalize', {
         method: 'POST',
@@ -895,7 +897,7 @@ export default function UploadPage() {
 
           // ── Grouped job: call finalize when ALL in group are Ready ──
           if (job.stage === 'Ready' && job.ingest_group_id && job.blob_url) {
-            _tryFinalizeGroup(jobId, job.ingest_group_id, job.blob_url, job.assigned_quality, job.hls_playlist, meta);
+            _tryFinalizeGroup(jobId, job.ingest_group_id, job.blob_url, job.assigned_quality, job.hls_playlist, meta, title);
           }
         }
       } catch {}
@@ -1257,7 +1259,7 @@ export default function UploadPage() {
 
       // ── 3. Build slug + blob base name ──────────────────────
       const slug = form.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const blobBaseName = `${user.id}/${Date.now()}-${slug}`;
+      const blobBaseName = `${user.id}/${slug}/${Date.now()}`;
       const groupId = form.multiQuality ? `grp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : undefined;
 
       const sharedMetadata = {

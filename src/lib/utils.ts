@@ -42,7 +42,7 @@ export function generateBlobName(userId: string, fileName: string): string {
     .replace(/\.[^/.]+$/, '')
     .replace(/[^a-zA-Z0-9-_]/g, '_')
     .slice(0, 50);
-  return `${userId}/${timestamp}-${sanitized}.${ext}`;
+  return `${userId}/${sanitized}/${timestamp}.${ext}`;
 }
 
 export function getVideoMimeType(fileName: string): string {
