@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Fonts loaded via next/font in layout.tsx — no render-blocking @import */
 
 @tailwind base;
 @tailwind components;
@@ -22,7 +22,7 @@
 html { scroll-behavior: smooth; }
 
 body {
-  font-family: 'DM Sans', sans-serif;
+  font-family: var(--font-body), 'DM Sans', sans-serif;
   background: var(--cinema-bg);
   color: var(--cinema-text);
   min-height: 100vh;
@@ -108,7 +108,7 @@ video::-webkit-media-controls { display: none !important; }
 }
 
 /* ─── Inputs ─────────────────────────────────────────────────────────────── */
-input, textarea, select { font-family: 'DM Sans', sans-serif; }
+input, textarea, select { font-family: var(--font-body), 'DM Sans', sans-serif; }
 input::placeholder, textarea::placeholder { color: #6b5a80; }
 .focus-ring:focus { outline: none; box-shadow: 0 0 0 2px var(--cinema-bg), 0 0 0 4px var(--cinema-accent); }
 

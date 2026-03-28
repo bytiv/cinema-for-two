@@ -70,7 +70,7 @@ const ALL_SUBTITLE_LANGUAGES: { code: string; label: string }[] = [
   { code: 'uk', label: 'Ukrainian' }, { code: 'ur', label: 'Urdu' }, { code: 'vi', label: 'Vietnamese' },
 ];
 
-type Tab = 'direct' | 'torrent' | 'search' | 'jobs';
+type Tab = 'direct' | 'torrent' | 'search' | 'jobs' | 'external';
 
 // ─────────────────────────────────────────────────────────────
 // Submit phase — shown instead of the spinner label
@@ -546,6 +546,35 @@ export default function UploadPage() {
   const [torrentSearchResults, setTorrentSearchResults] = useState<TorrentSearchResult[]>([]);
   const [torrentSearching,     setTorrentSearching]     = useState(false);
   const [torrentSearchError,   setTorrentSearchError]   = useState('');
+
+  // ── External URL tab state ─────────────────────────────────
+  const [extUrl,               setExtUrl]               = useState('');
+  const [extValidating,        setExtValidating]        = useState(false);
+  const [extValidated,         setExtValidated]         = useState<{ provider: string; url: string; type: 'direct' | 'page'; supported: boolean } | null>(null);
+  const [extError,             setExtError]             = useState('');
+  const [extSubmitting,        setExtSubmitting]        = useState(false);
+  const [extSuccess,           setExtSuccess]           = useState('');
+  // External tab re-uses TMDB state for movie selection (tmdbQuery, tmdbResults, selectedTmdb, selectedTV, etc.)
+  const [extTmdbQuery,         setExtTmdbQuery]         = useState('');
+  const [extTmdbResults,       setExtTmdbResults]       = useState<TMDBSearchResult[]>([]);
+  const [extTmdbSearching,     setExtTmdbSearching]     = useState(false);
+  const [extTmdbError,         setExtTmdbError]         = useState('');
+  const [extSelectedTmdb,      setExtSelectedTmdb]      = useState<TMDBMovieDetail | null>(null);
+  const [extSelectedTV,        setExtSelectedTV]        = useState<TMDBTVDetail | null>(null);
+  const [extTmdbLoadingDetail, setExtTmdbLoadingDetail] = useState(false);
+  const [extTvSeasons,         setExtTvSeasons]         = useState<TMDBSeason[]>([]);
+  const [extSelectedSeason,    setExtSelectedSeason]    = useState<number | null>(null);
+  const [extTvEpisodes,        setExtTvEpisodes]        = useState<TMDBEpisode[]>([]);
+  const [extLoadingEpisodes,   setExtLoadingEpisodes]   = useState(false);
+  const [extSelectedEpisode,   setExtSelectedEpisode]   = useState<TMDBEpisode | null>(null);
+  const [extQuality,           setExtQuality]           = useState<VideoQuality | null>(null);
+  const extTmdbSearchTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // External source search state
+  const [extSourceResults,     setExtSourceResults]     = useState<any[]>([]);
+  const [extSourceSearching,   setExtSourceSearching]   = useState(false);
+  const [extSourceError,       setExtSourceError]       = useState('');
+  const [extMode,              setExtMode]              = useState<'paste' | 'search'>('search'); // default to search mode
 
   /** Toggle multi-quality — auto-picks best 720p + 1080p from visible results when turning ON */
   const toggleMultiQuality = useCallback(() => {
@@ -1879,6 +1908,230 @@ export default function UploadPage() {
   };
 
   // ─────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────
+  // External URL handlers
+  // ─────────────────────────────────────────────────────────
+
+  /** Debounced TMDB search for the external tab */
+  function handleExtTmdbQueryChange(value: string) {
+    setExtTmdbQuery(value);
+    setExtTmdbError('');
+    if (extTmdbSearchTimer.current) clearTimeout(extTmdbSearchTimer.current);
+    if (!value.trim()) { setExtTmdbResults([]); return; }
+    setExtTmdbSearching(true);
+    extTmdbSearchTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/tmdb/search?query=${encodeURIComponent(value.trim())}`);
+        if (!res.ok) throw new Error('Search failed');
+        const data = await res.json();
+        setExtTmdbResults(data.results || []);
+      } catch (err: any) {
+        setExtTmdbError(err.message || 'Search failed');
+      } finally {
+        setExtTmdbSearching(false);
+      }
+    }, 400);
+  }
+
+  /** Select a TMDB result in the external tab */
+  async function handleExtTmdbSelect(result: TMDBSearchResult) {
+    setExtTmdbResults([]);
+    setExtTmdbQuery('');
+    setExtTmdbLoadingDetail(true);
+    setExtSelectedTV(null);
+    setExtSelectedTmdb(null);
+    setExtSelectedEpisode(null);
+    setExtSelectedSeason(null);
+    setExtTvEpisodes([]);
+    // Reset source search state
+    setExtSourceResults([]);
+    setExtSourceError('');
+    setExtValidated(null);
+    setExtUrl('');
+    setExtError('');
+    setExtSuccess('');
+
+    try {
+      if (result.media_type === 'tv') {
+        const res = await fetch(`/api/tmdb/search?tv_id=${result.tmdb_id}`);
+        if (!res.ok) throw new Error('Failed to load TV details');
+        const data = await res.json();
+        setExtSelectedTV(data.tv);
+        setExtTvSeasons(data.tv.seasons || []);
+      } else {
+        const res = await fetch(`/api/tmdb/search?id=${result.tmdb_id}`);
+        if (!res.ok) throw new Error('Failed to load movie details');
+        const data = await res.json();
+        setExtSelectedTmdb(data.movie);
+      }
+    } catch (err: any) {
+      setExtTmdbError(err.message || 'Failed to load details');
+    } finally {
+      setExtTmdbLoadingDetail(false);
+    }
+  }
+
+  /** Load episodes for a TV season in the external tab */
+  async function handleExtSeasonSelect(seasonNum: number) {
+    if (!extSelectedTV) return;
+    setExtSelectedSeason(seasonNum);
+    setExtSelectedEpisode(null);
+    setExtLoadingEpisodes(true);
+    try {
+      const res = await fetch(`/api/tmdb/search?season_of=${extSelectedTV.tmdb_id}&season=${seasonNum}`);
+      if (!res.ok) throw new Error('Failed to load episodes');
+      const data = await res.json();
+      setExtTvEpisodes(data.episodes || []);
+    } catch {
+      setExtTvEpisodes([]);
+    } finally {
+      setExtLoadingEpisodes(false);
+    }
+  }
+
+  /** Search free video sources for the selected TMDB title */
+  async function handleExtSourceSearch() {
+    const tmdb = extSelectedTmdb || extSelectedTV;
+    if (!tmdb) return;
+    setExtSourceSearching(true);
+    setExtSourceError('');
+    setExtSourceResults([]);
+    try {
+      const params = new URLSearchParams({ query: tmdb.title });
+      if (tmdb.year) params.set('year', String(tmdb.year));
+      // Pass episode info for TV shows
+      if (extSelectedTV) {
+        params.set('media_type', 'tv');
+        if (extSelectedSeason) params.set('season', String(extSelectedSeason));
+        if (extSelectedEpisode) {
+          params.set('episode', String(extSelectedEpisode.episode_number));
+          if (extSelectedEpisode.name) params.set('episode_title', extSelectedEpisode.name);
+        }
+      } else {
+        params.set('media_type', 'movie');
+      }
+      const res = await fetch(`/api/external/search?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Search failed');
+      setExtSourceResults(data.results || []);
+      if ((data.results || []).length === 0) {
+        setExtSourceError('No free sources found. Try pasting a link manually.');
+      }
+    } catch (err: any) {
+      setExtSourceError(err.message || 'Search failed');
+    } finally {
+      setExtSourceSearching(false);
+    }
+  }
+
+  /** Pick a source from search results — auto-fills and validates the URL */
+  async function handleExtPickSource(source: any) {
+    setExtUrl(source.url);
+    setExtValidated({
+      provider: source.provider,
+      url: source.url,
+      type: source.videoUrl ? 'direct' : 'page',
+      supported: true,
+    });
+    setExtError('');
+    setExtMode('paste'); // switch to paste view to show the validated result
+  }
+
+  /** Validate an external URL */
+  async function handleExtValidate() {
+    const url = extUrl.trim();
+    if (!url) return;
+    setExtValidating(true);
+    setExtError('');
+    setExtValidated(null);
+    try {
+      const res = await fetch('/api/external/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Validation failed');
+      setExtValidated(data);
+    } catch (err: any) {
+      setExtError(err.message || 'Could not validate this URL');
+    } finally {
+      setExtValidating(false);
+    }
+  }
+
+  /** Submit external URL movie to library */
+  async function handleExtSubmit() {
+    if (!extValidated) return;
+    const tmdb = extSelectedTmdb || extSelectedTV;
+    if (!tmdb) { setExtError('Please select a movie or show from TMDB first'); return; }
+
+    setExtSubmitting(true);
+    setExtError('');
+    setExtSuccess('');
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not logged in');
+
+      const isTV = !!extSelectedTV;
+      const episode = extSelectedEpisode;
+
+      const title = isTV && episode
+        ? `${extSelectedTV!.title} S${String(extSelectedSeason).padStart(2,'0')}E${String(episode.episode_number).padStart(2,'0')} - ${episode.name}`
+        : tmdb.title;
+
+      const payload = {
+        title,
+        description: isTV && episode ? episode.overview : tmdb.overview,
+        poster_url: tmdb.poster_url,
+        blob_url: extValidated.url,
+        blob_name: `external://${extValidated.provider}`,
+        file_size: 0,
+        format: 'external',
+        quality: extQuality,
+        subtitles: [] as any[],
+        ingest_method: 'external_url',
+        external_url: extValidated.url,
+        external_provider: extValidated.provider,
+        uploaded_by: user.id,
+        is_public: true,
+        tmdb_id: tmdb.tmdb_id,
+        release_date: tmdb.release_date || null,
+        rating: tmdb.rating || null,
+        genres: tmdb.genres || [],
+        runtime: ('runtime' in tmdb ? tmdb.runtime : null) || (episode?.runtime ?? null),
+        tagline: ('tagline' in tmdb ? tmdb.tagline : '') || '',
+        imdb_id: ('imdb_id' in tmdb ? tmdb.imdb_id : null) || null,
+        original_language: tmdb.language || null,
+        ...(isTV ? {
+          series_name: extSelectedTV!.title,
+          season_number: extSelectedSeason,
+          episode_number: episode?.episode_number ?? null,
+          episode_title: episode?.name ?? null,
+        } : {}),
+      };
+
+      const { error } = await supabase.from('movies').insert(payload);
+      if (error) throw new Error(error.message);
+
+      setExtSuccess(`"${title}" added to your library!`);
+      // Reset form
+      setExtUrl('');
+      setExtValidated(null);
+      setExtSelectedTmdb(null);
+      setExtSelectedTV(null);
+      setExtSelectedEpisode(null);
+      setExtSelectedSeason(null);
+      setExtTvEpisodes([]);
+      setExtQuality(null);
+    } catch (err: any) {
+      setExtError(err.message || 'Failed to add movie');
+    } finally {
+      setExtSubmitting(false);
+    }
+  }
+
   // Derived
   // ─────────────────────────────────────────────────────────
   const activeCount = activeJobs.filter((j) => j.job && !TERMINAL.has(j.job.stage)).length;
@@ -1889,7 +2142,7 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen">
       <Navbar />
-      <main className="relative z-10 pt-24 pb-16 px-4 sm:px-6 lg:px-8 max-w-2xl mx-auto">
+      <main className="relative z-10 pt-24 pb-16 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto">
 
         {/* Page header */}
         <div className="mb-8">
@@ -1902,11 +2155,12 @@ export default function UploadPage() {
         {/* Tab switcher */}
         <div className="flex items-center gap-1 p-1 rounded-2xl bg-cinema-card/60 border border-cinema-border backdrop-blur-sm mb-6">
           {([
-            { id: 'search',  icon: <Search className="w-4 h-4" />,     label: 'Search Movie'   },
-            { id: 'direct',  icon: <Upload className="w-4 h-4" />,     label: 'Upload File'    },
-            { id: 'torrent', icon: <Magnet className="w-4 h-4" />,     label: 'Torrent / Hash' },
-            { id: 'jobs',    icon: <FolderOpen className="w-4 h-4" />, label: 'Active Jobs', badge: activeCount },
-          ] as { id: Tab; icon: React.ReactNode; label: string; badge?: number }[]).map(({ id, icon, label, badge }) => (
+            { id: 'search',   icon: <Search className="w-4 h-4" />,     label: 'Search Movie'   },
+            { id: 'direct',   icon: <Upload className="w-4 h-4" />,     label: 'Upload File'    },
+            { id: 'torrent',  icon: <Magnet className="w-4 h-4" />,     label: 'Torrent / Hash' },
+            { id: 'external', icon: <Globe className="w-4 h-4" />,      label: 'Link', beta: true },
+            { id: 'jobs',     icon: <FolderOpen className="w-4 h-4" />, label: 'Active Jobs', badge: activeCount },
+          ] as { id: Tab; icon: React.ReactNode; label: string; badge?: number; beta?: boolean }[]).map(({ id, icon, label, badge, beta }) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -1919,6 +2173,14 @@ export default function UploadPage() {
             >
               {icon}
               <span className="hidden sm:inline">{label}</span>
+              {beta && (
+                <span className={cn(
+                  'inline-flex items-center justify-center px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider',
+                  tab === id ? 'bg-cinema-bg/30 text-cinema-bg' : 'bg-cinema-warm/20 text-cinema-warm',
+                )}>
+                  Beta
+                </span>
+              )}
               {badge != null && badge > 0 && (
                 <span className={cn(
                   'inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold',
@@ -3303,6 +3565,431 @@ export default function UploadPage() {
             >
               {multiQualityEnabled ? 'Start Both Downloads' : 'Start Download'}
             </Button>
+          </div>
+        )}
+
+        {/* ── TAB: External URL (Beta) ────────────────────────── */}
+        {tab === 'external' && (
+          <div className="space-y-6 animate-fade-in">
+
+            {/* Beta banner */}
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-cinema-warm/10 border border-cinema-warm/20">
+              <Radio className="w-5 h-5 text-cinema-warm flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-cinema-warm">External Link — Beta</p>
+                <p className="text-xs text-cinema-text-dim mt-0.5">
+                  Add movies &amp; shows by pasting a video link from Dailymotion, Internet Archive, or a direct MP4 URL. No download or upload needed.
+                </p>
+              </div>
+            </div>
+
+            {/* Step 1: Search TMDB */}
+            <div className="space-y-3">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-cinema-text">
+                <span className="w-6 h-6 rounded-full bg-cinema-accent/20 text-cinema-accent flex items-center justify-center text-xs font-bold">1</span>
+                Search for a movie or show
+              </h3>
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-cinema-text-dim" />
+                <input
+                  type="text"
+                  placeholder="Search TMDB for a movie or TV show..."
+                  value={extTmdbQuery}
+                  onChange={(e) => handleExtTmdbQueryChange(e.target.value)}
+                  className="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-cinema-card/50 border border-cinema-border text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all"
+                />
+                {extTmdbSearching && (
+                  <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-cinema-accent animate-spin" />
+                )}
+              </div>
+
+              {extTmdbError && (
+                <div className="flex items-center gap-2 text-sm text-cinema-error">
+                  <AlertCircle className="w-4 h-4" /> {extTmdbError}
+                </div>
+              )}
+
+              {/* Search results grid */}
+              {extTmdbResults.length > 0 && !extSelectedTmdb && !extSelectedTV && (
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 max-h-72 overflow-y-auto pr-1">
+                  {extTmdbResults.map((m) => (
+                    <button key={`${m.media_type}-${m.tmdb_id}`} onClick={() => handleExtTmdbSelect(m)}
+                      className="group text-left rounded-xl overflow-hidden bg-cinema-card/50 border border-cinema-border hover:border-cinema-accent/50 transition-all">
+                      {m.poster_url ? (
+                        <img src={m.poster_url} alt={m.title} className="w-full aspect-[2/3] object-cover" />
+                      ) : (
+                        <div className="w-full aspect-[2/3] bg-cinema-surface flex items-center justify-center">
+                          <Film className="w-8 h-8 text-cinema-text-dim" />
+                        </div>
+                      )}
+                      <div className="p-2">
+                        <p className="text-xs font-medium text-cinema-text line-clamp-1">{m.title}</p>
+                        <div className="flex items-center gap-1 mt-0.5 text-[10px] text-cinema-text-dim">
+                          {m.year && <span>{m.year}</span>}
+                          {m.media_type === 'tv' && <span className="px-1 py-0.5 rounded bg-cinema-secondary/20 text-cinema-secondary font-medium">TV</span>}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {extTmdbLoadingDetail && (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 text-cinema-accent animate-spin" />
+                </div>
+              )}
+
+              {/* Selected movie card */}
+              {extSelectedTmdb && (
+                <div className="bg-cinema-card/50 border border-cinema-accent/30 rounded-2xl overflow-hidden">
+                  <div className="flex gap-4 p-4">
+                    {extSelectedTmdb.poster_url ? (
+                      <img src={extSelectedTmdb.poster_url} alt={extSelectedTmdb.title} className="w-24 h-36 rounded-xl object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-24 h-36 rounded-xl bg-cinema-surface flex items-center justify-center flex-shrink-0">
+                        <Film className="w-8 h-8 text-cinema-text-dim" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="font-display text-lg font-bold text-cinema-text leading-tight">{extSelectedTmdb.title}</h4>
+                        <button onClick={() => setExtSelectedTmdb(null)} className="text-cinema-text-dim hover:text-cinema-error transition-colors flex-shrink-0">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      {extSelectedTmdb.tagline && <p className="text-xs text-cinema-accent italic mt-1">{extSelectedTmdb.tagline}</p>}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        {extSelectedTmdb.year && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-cinema-surface text-[11px] text-cinema-text-muted">
+                            <Calendar className="w-3 h-3" /> {extSelectedTmdb.year}
+                          </span>
+                        )}
+                        {extSelectedTmdb.rating > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-yellow-500/10 text-[11px] text-yellow-400 font-medium">
+                            <Star className="w-3 h-3" fill="currentColor" /> {extSelectedTmdb.rating.toFixed(1)}
+                          </span>
+                        )}
+                      </div>
+                      {extSelectedTmdb.genres?.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {extSelectedTmdb.genres.slice(0, 4).map((g) => (
+                            <span key={g} className="px-1.5 py-0.5 rounded-md bg-cinema-accent/10 text-[10px] text-cinema-accent font-medium">{g}</span>
+                          ))}
+                        </div>
+                      )}
+                      {extSelectedTmdb.overview && (
+                        <p className="text-xs text-cinema-text-muted mt-2 line-clamp-2">{extSelectedTmdb.overview}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Selected TV show card */}
+              {extSelectedTV && (
+                <div className="bg-cinema-card/50 border border-cinema-accent/30 rounded-2xl overflow-hidden">
+                  <div className="flex gap-4 p-4">
+                    {extSelectedTV.poster_url ? (
+                      <img src={extSelectedTV.poster_url} alt={extSelectedTV.title} className="w-24 h-36 rounded-xl object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-24 h-36 rounded-xl bg-cinema-surface flex items-center justify-center flex-shrink-0">
+                        <Film className="w-8 h-8 text-cinema-text-dim" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="font-display text-lg font-bold text-cinema-text leading-tight">{extSelectedTV.title}</h4>
+                        <button onClick={() => { setExtSelectedTV(null); setExtTvSeasons([]); setExtSelectedSeason(null); setExtTvEpisodes([]); setExtSelectedEpisode(null); }} className="text-cinema-text-dim hover:text-cinema-error transition-colors flex-shrink-0">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        <span className="px-1.5 py-0.5 rounded bg-cinema-secondary/20 text-[10px] text-cinema-secondary font-medium">TV Show</span>
+                        {extSelectedTV.year && <span className="text-[11px] text-cinema-text-muted">{extSelectedTV.year}</span>}
+                        {extSelectedTV.rating > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-yellow-500/10 text-[11px] text-yellow-400 font-medium">
+                            <Star className="w-3 h-3" fill="currentColor" /> {extSelectedTV.rating.toFixed(1)}
+                          </span>
+                        )}
+                      </div>
+                      {extSelectedTV.overview && (
+                        <p className="text-xs text-cinema-text-muted mt-2 line-clamp-2">{extSelectedTV.overview}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Season selector */}
+                  <div className="border-t border-cinema-border px-4 py-3 space-y-3">
+                    <label className="flex items-center gap-2 text-xs font-medium text-cinema-text-muted">
+                      <Layers className="w-3.5 h-3.5 text-cinema-secondary" /> Select Season
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {extTvSeasons.map((s) => (
+                        <button key={s.season_number} onClick={() => handleExtSeasonSelect(s.season_number)}
+                          className={cn('px-3 py-1.5 rounded-lg text-xs font-medium transition-all border',
+                            extSelectedSeason === s.season_number
+                              ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent'
+                              : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40')}>
+                          S{String(s.season_number).padStart(2, '0')} <span className="text-cinema-text-dim ml-1">({s.episode_count} ep)</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Episode list */}
+                    {extLoadingEpisodes && (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="w-5 h-5 text-cinema-accent animate-spin" />
+                      </div>
+                    )}
+                    {extTvEpisodes.length > 0 && (
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                        {extTvEpisodes.map((ep) => (
+                          <button key={ep.episode_number} onClick={() => setExtSelectedEpisode(ep)}
+                            className={cn('w-full text-left flex items-center gap-3 p-2.5 rounded-xl transition-all border',
+                              extSelectedEpisode?.episode_number === ep.episode_number
+                                ? 'border-cinema-accent bg-cinema-accent/10'
+                                : 'border-transparent hover:bg-cinema-surface/60')}>
+                            <span className={cn('w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0',
+                              extSelectedEpisode?.episode_number === ep.episode_number
+                                ? 'bg-cinema-accent text-cinema-bg' : 'bg-cinema-surface text-cinema-text-muted')}>
+                              {ep.episode_number}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-cinema-text truncate">{ep.name}</p>
+                              {ep.runtime && <p className="text-[10px] text-cinema-text-dim">{ep.runtime}min</p>}
+                            </div>
+                            {ep.rating > 0 && (
+                              <span className="text-[10px] text-yellow-400 flex items-center gap-0.5">
+                                <Star className="w-2.5 h-2.5" fill="currentColor" /> {ep.rating.toFixed(1)}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: Find or paste a video source */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-cinema-text">
+                  <span className="w-6 h-6 rounded-full bg-cinema-accent/20 text-cinema-accent flex items-center justify-center text-xs font-bold">2</span>
+                  Find a video source
+                </h3>
+                {/* Mode toggle */}
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-cinema-surface border border-cinema-border">
+                  <button onClick={() => setExtMode('search')}
+                    className={cn('px-3 py-1 rounded-md text-xs font-medium transition-all',
+                      extMode === 'search' ? 'bg-cinema-accent text-cinema-bg' : 'text-cinema-text-dim hover:text-cinema-text')}>
+                    Search Sources
+                  </button>
+                  <button onClick={() => setExtMode('paste')}
+                    className={cn('px-3 py-1 rounded-md text-xs font-medium transition-all',
+                      extMode === 'paste' ? 'bg-cinema-accent text-cinema-bg' : 'text-cinema-text-dim hover:text-cinema-text')}>
+                    Paste Link
+                  </button>
+                </div>
+              </div>
+
+              {/* ── Search Sources mode ── */}
+              {extMode === 'search' && (
+                <div className="bg-cinema-card/50 border border-cinema-border rounded-2xl p-5 space-y-4">
+                  <p className="text-xs text-cinema-text-dim">
+                    We&apos;ll search Dailymotion, Internet Archive and other free sources for the selected title.
+                  </p>
+                  <button
+                    onClick={handleExtSourceSearch}
+                    disabled={(!extSelectedTmdb && !extSelectedTV) || extSourceSearching}
+                    className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-sm font-medium bg-cinema-secondary/15 border border-cinema-secondary/20 text-cinema-secondary hover:bg-cinema-secondary/25 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    {extSourceSearching ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Searching free sources...</>
+                    ) : (
+                      <><Search className="w-4 h-4" /> Search for &ldquo;{
+                        extSelectedTV && extSelectedEpisode
+                          ? `${extSelectedTV.title} S${String(extSelectedSeason).padStart(2,'0')}E${String(extSelectedEpisode.episode_number).padStart(2,'0')}`
+                          : (extSelectedTmdb || extSelectedTV)?.title || 'a movie'
+                      }&rdquo;</>
+                    )}
+                  </button>
+
+                  {extSourceError && !extSourceResults.length && (
+                    <div className="flex items-center gap-2 text-xs text-cinema-text-dim">
+                      <AlertCircle className="w-3.5 h-3.5 text-cinema-warm" /> {extSourceError}
+                    </div>
+                  )}
+
+                  {/* Source results */}
+                  {extSourceResults.length > 0 && (
+                    <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                      {extSourceResults.map((source) => (
+                        <button
+                          key={source.id}
+                          onClick={() => handleExtPickSource(source)}
+                          className={cn(
+                            'w-full text-left flex items-start gap-3 p-3 rounded-xl border transition-all hover:border-cinema-accent/50',
+                            extValidated?.url === source.url
+                              ? 'border-cinema-accent bg-cinema-accent/5'
+                              : 'border-cinema-border bg-cinema-surface/30 hover:bg-cinema-surface/60',
+                          )}
+                        >
+                          {/* Thumbnail */}
+                          {source.thumbnailUrl ? (
+                            <img src={source.thumbnailUrl} alt="" className="w-20 h-14 rounded-lg object-cover flex-shrink-0 bg-cinema-surface" />
+                          ) : (
+                            <div className="w-20 h-14 rounded-lg bg-cinema-surface flex items-center justify-center flex-shrink-0">
+                              <Film className="w-5 h-5 text-cinema-text-dim" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-cinema-text line-clamp-1">{source.title}</p>
+                            {source.description && (
+                              <p className="text-[11px] text-cinema-text-dim line-clamp-1 mt-0.5">{source.description}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-cinema-surface text-[10px] text-cinema-text-muted font-medium">
+                                {source.providerIcon} {source.provider}
+                              </span>
+                              {source.year && (
+                                <span className="text-[10px] text-cinema-text-dim">{source.year}</span>
+                              )}
+                              {source.duration && (
+                                <span className="text-[10px] text-cinema-text-dim">{source.duration}</span>
+                              )}
+                              {source.views != null && source.views > 0 && (
+                                <span className="text-[10px] text-cinema-text-dim">{source.views.toLocaleString()} views</span>
+                              )}
+                              {source.relevanceScore != null && (
+                                <span className={cn('text-[10px] font-medium',
+                                  source.relevanceScore >= 70 ? 'text-cinema-success' :
+                                  source.relevanceScore >= 40 ? 'text-cinema-warm' : 'text-cinema-text-dim'
+                                )}>
+                                  {source.relevanceScore}% match
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {extValidated?.url === source.url && (
+                            <CheckCircle className="w-5 h-5 text-cinema-accent flex-shrink-0 mt-1" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Paste Link mode ── */}
+              {extMode === 'paste' && (
+                <div className="bg-cinema-card/50 border border-cinema-border rounded-2xl p-5 space-y-4">
+                  <div className="relative">
+                    <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-cinema-text-dim" />
+                    <input
+                      type="url"
+                      placeholder="https://www.dailymotion.com/video/... or direct .mp4 link"
+                      value={extUrl}
+                      onChange={(e) => { setExtUrl(e.target.value); setExtValidated(null); setExtError(''); }}
+                      className="w-full pl-11 pr-4 py-3 rounded-xl bg-cinema-surface border border-cinema-border text-cinema-text placeholder:text-cinema-text-dim focus:outline-none focus:border-cinema-accent/50 focus:ring-2 focus:ring-cinema-accent/20 transition-all text-sm"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[10px] text-cinema-text-dim">
+                    <span className="px-2 py-1 rounded-md bg-cinema-surface border border-cinema-border">Dailymotion</span>
+                    <span className="px-2 py-1 rounded-md bg-cinema-surface border border-cinema-border">Internet Archive</span>
+                    <span className="px-2 py-1 rounded-md bg-cinema-surface border border-cinema-border">OK.ru</span>
+                    <span className="px-2 py-1 rounded-md bg-cinema-surface border border-cinema-border">Direct .mp4 URL</span>
+                    <span className="px-2 py-1 rounded-md bg-cinema-surface border border-cinema-border">Any embed URL</span>
+                  </div>
+                  <button
+                    onClick={handleExtValidate}
+                    disabled={!extUrl.trim() || extValidating}
+                    className={cn(
+                      'flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-sm font-medium transition-all',
+                      extValidated
+                        ? extValidated.supported
+                          ? 'bg-cinema-success/10 border border-cinema-success/30 text-cinema-success'
+                          : 'bg-cinema-warm/10 border border-cinema-warm/30 text-cinema-warm'
+                        : 'bg-cinema-secondary/15 border border-cinema-secondary/20 text-cinema-secondary hover:bg-cinema-secondary/25 disabled:opacity-40 disabled:cursor-not-allowed',
+                    )}
+                  >
+                    {extValidating ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Validating...</>
+                    ) : extValidated ? (
+                      extValidated.supported
+                        ? <><CheckCircle className="w-4 h-4" /> {extValidated.provider} — plays in our player</>
+                        : <><AlertTriangle className="w-4 h-4" /> {extValidated.provider} — may not play natively</>
+                    ) : (
+                      <><Zap className="w-4 h-4" /> Validate Link</>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Step 3: Quality (optional) */}
+            {extValidated && (extSelectedTmdb || extSelectedTV) && (
+              <div className="space-y-3">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-cinema-text">
+                  <span className="w-6 h-6 rounded-full bg-cinema-accent/20 text-cinema-accent flex items-center justify-center text-xs font-bold">3</span>
+                  Video Quality <span className="text-xs font-normal text-cinema-text-dim">(optional)</span>
+                </h3>
+                <div className="grid grid-cols-4 gap-2">
+                  {QUALITY_OPTIONS.map((opt) => (
+                    <button key={opt.value} type="button" onClick={() => setExtQuality(extQuality === opt.value ? null : opt.value)}
+                      className={cn('flex flex-col items-center py-2.5 px-3 rounded-xl border text-xs font-medium transition-all duration-200',
+                        extQuality === opt.value
+                          ? 'border-cinema-accent bg-cinema-accent/10 text-cinema-accent'
+                          : 'border-cinema-border bg-cinema-card/50 text-cinema-text-muted hover:border-cinema-accent/40 hover:text-cinema-text')}>
+                      <span className="text-sm font-bold">{opt.label}</span>
+                      <span className="text-[10px] mt-0.5 opacity-70">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Messages */}
+            {extError && (
+              <div className="flex items-center gap-3 p-4 rounded-xl bg-cinema-error/10 border border-cinema-error/20">
+                <AlertCircle className="w-5 h-5 text-cinema-error flex-shrink-0" />
+                <p className="text-sm text-cinema-error">{extError}</p>
+              </div>
+            )}
+
+            {extSuccess && (
+              <div className="flex items-center gap-3 p-4 rounded-xl bg-cinema-success/10 border border-cinema-success/20">
+                <CheckCircle className="w-5 h-5 text-cinema-success flex-shrink-0" />
+                <p className="text-sm text-cinema-success">{extSuccess}</p>
+              </div>
+            )}
+
+            {/* Submit */}
+            <Button
+              onClick={handleExtSubmit}
+              disabled={!extValidated || (!extSelectedTmdb && !extSelectedTV) || (!!extSelectedTV && !extSelectedEpisode) || extSubmitting}
+              loading={extSubmitting}
+              size="lg"
+              className="w-full"
+              icon={<Plus className="w-5 h-5" />}
+            >
+              {extSubmitting ? 'Adding to Library...' : 'Add to Library'}
+            </Button>
+
+            {/* Empty state hint */}
+            {!extSelectedTmdb && !extSelectedTV && !extTmdbQuery && (
+              <div className="text-center py-8">
+                <div className="w-14 h-14 rounded-2xl bg-cinema-card border border-cinema-border flex items-center justify-center mx-auto mb-3">
+                  <Globe className="w-7 h-7 text-cinema-text-dim opacity-40" />
+                </div>
+                <p className="text-cinema-text-muted font-medium text-sm">Link a movie from the web</p>
+                <p className="text-xs text-cinema-text-dim mt-1 max-w-xs mx-auto">
+                  Search for a movie on TMDB, paste a video link from Dailymotion or similar, and add it directly to your library — no downloads needed.
+                </p>
+              </div>
+            )}
           </div>
         )}
 

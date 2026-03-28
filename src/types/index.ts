@@ -24,7 +24,7 @@ export interface PostcardShare {
 }
 
 export type VideoQuality = '480p' | '720p' | '1080p' | '4K';
-export type IngestMethod = 'direct_upload' | 'torrent';
+export type IngestMethod = 'direct_upload' | 'torrent' | 'external_url';
 
 export interface QualityVariant {
   quality: VideoQuality;
@@ -98,6 +98,8 @@ export interface Movie {
   info_hash: string | null;       // null for direct uploads
   ingest_job_id: string | null;   // null for direct uploads
   ingest_group_id: string | null; // groups multi-quality ingest jobs together
+  external_url: string | null;    // external video URL for 'external_url' ingest method
+  external_provider: string | null; // e.g. 'dailymotion', 'archive.org', 'direct'
   uploaded_by: string;
   is_public: boolean;
   // Multi-quality & HLS

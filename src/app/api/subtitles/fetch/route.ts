@@ -320,16 +320,23 @@ async function searchSubdl(
   query: string | null,
   languages: string[],
   movieKeywords: string[],
+  seasonNum?: number | null,
+  episodeNum?: number | null,
 ): Promise<SubCandidate[]> {
   if (!SUBDL_API_KEY) return [];
 
   const langCodes = languages.map((l) => SUBDL_LANG_MAP[l] || l.toUpperCase());
+  const isTV = !!(seasonNum && episodeNum);
   const params = new URLSearchParams({
     api_key: SUBDL_API_KEY,
-    type: 'movie',
+    type: isTV ? 'tv' : 'movie',
     languages: langCodes.join(','),
     subs_per_page: '30',
   });
+  if (isTV) {
+    params.set('season_number', String(seasonNum));
+    params.set('episode_number', String(episodeNum));
+  }
   if (imdbId) params.set('imdb_id', imdbId);
   else if (tmdbId) params.set('tmdb_id', String(tmdbId));
   else if (query) params.set('film_name', query);
@@ -433,15 +440,15 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { movie_id, imdb_id, tmdb_id, query, languages, blob_name } = body;
+    const { movie_id, imdb_id, tmdb_id, query, languages, blob_name, season_number, episode_number } = body;
 
     if (!movie_id) return NextResponse.json({ error: 'movie_id required' }, { status: 400 });
     if (!languages?.length) return NextResponse.json({ error: 'languages required' }, { status: 400 });
 
-    // Get current movie
+    // Get current movie — use select('*') for compatibility with external movies
     const { data: movie } = await supabaseAdmin
       .from('movies')
-      .select('uploaded_by, subtitles, blob_name, title, imdb_id, tmdb_id, release_name, subtitle_options')
+      .select('*')
       .eq('id', movie_id)
       .single();
     if (!movie) return NextResponse.json({ error: 'Movie not found' }, { status: 404 });
@@ -463,7 +470,12 @@ export async function POST(req: NextRequest) {
     const effectiveImdb = imdb_id || movie.imdb_id || null;
     const effectiveTmdb = tmdb_id || movie.tmdb_id || null;
     const effectiveQuery = query || movie.title || null;
-    const effectiveBlobName = blob_name || movie.release_name || movie.blob_name || '';
+    // For external movies, blob_name is "external://provider" — skip it for release matching
+    const rawBlobName = blob_name || movie.release_name || movie.blob_name || '';
+    const effectiveBlobName = rawBlobName.startsWith('external://') ? '' : rawBlobName;
+    // TV episode info
+    const effectiveSeason = season_number || movie.season_number || null;
+    const effectiveEpisode = episode_number || movie.episode_number || null;
 
     if (!effectiveImdb && !effectiveTmdb && !effectiveQuery) {
       return NextResponse.json({ error: 'No identifiers available to search subtitles' }, { status: 400 });
@@ -474,7 +486,7 @@ export async function POST(req: NextRequest) {
 
     // ── Gather candidates from all sources ──
     const [subdlResults, yifyResults] = await Promise.allSettled([
-      searchSubdl(effectiveImdb, effectiveTmdb, effectiveQuery, needed, movieKeywords),
+      searchSubdl(effectiveImdb, effectiveTmdb, effectiveQuery, needed, movieKeywords, effectiveSeason, effectiveEpisode),
       searchYifySubs(effectiveImdb, effectiveTmdb, needed, movieKeywords),
     ]);
 

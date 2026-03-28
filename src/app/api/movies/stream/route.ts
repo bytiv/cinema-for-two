@@ -2,6 +2,7 @@
  * GET /api/movies/stream
  *
  * Returns short-lived SAS streaming URLs for a movie.
+ * For external URL movies, resolves to playable video URLs inline.
  *
  * Query params:
  *   blobName  string  — blob_name on the movie row (legacy single-quality)
@@ -10,9 +11,6 @@
  *   hls       string  — 'master' for dynamic master playlist, or quality label for per-quality playlist
  *
  * Returns: { url, variants?, hlsMasterUrl? }
- *
- * The master playlist is generated DYNAMICALLY with fresh SAS URLs on every
- * request — no stale tokens from static blob files.
  */
 
 import { NextResponse } from 'next/server';
@@ -36,36 +34,124 @@ const QUALITY_RESOLUTION: Record<string, string> = {
   '4K':    '3840x2160',
 };
 
-/**
- * Generate a master HLS playlist on-the-fly with fresh SAS URLs.
- * Returns the playlist content as a string.
- */
 function buildDynamicMasterPlaylist(variants: QualityVariant[]): string | null {
   const hlsVariants = variants.filter(v => v.hls_playlist);
   if (hlsVariants.length < 1) return null;
-
-  // Sort lowest quality first (HLS convention)
   const sorted = [...hlsVariants].sort(
     (a, b) => (QUALITY_ORDER[a.quality] ?? 0) - (QUALITY_ORDER[b.quality] ?? 0),
   );
-
   const lines: string[] = ['#EXTM3U', '#EXT-X-VERSION:4', ''];
-
   for (const v of sorted) {
     const bandwidth  = QUALITY_BANDWIDTH[v.quality]  ?? 3_000_000;
     const resolution = QUALITY_RESOLUTION[v.quality] ?? '1280x720';
-    // Fresh 4-hour SAS URL for each per-quality playlist
     const playlistUrl = generateReadSasUrl(CONTAINERS.movies, v.hls_playlist!, 4);
-
-    lines.push(
-      `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},NAME="${v.quality}"`,
-    );
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},NAME="${v.quality}"`);
     lines.push(playlistUrl);
     lines.push('');
   }
-
   return lines.join('\n');
 }
+
+// ── Inline external URL resolvers (no internal HTTP calls) ──────────────────
+
+async function resolveDailymotion(url: string): Promise<{ videoUrl: string; qualities: { quality: string; url: string }[] } | null> {
+  const patterns = [/dailymotion\.com\/video\/([a-zA-Z0-9]+)/, /dai\.ly\/([a-zA-Z0-9]+)/, /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/];
+  let videoId: string | null = null;
+  for (const re of patterns) { const m = url.match(re); if (m?.[1]) { videoId = m[1]; break; } }
+  if (!videoId) return null;
+
+  try {
+    const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!metaRes.ok) { console.warn(`[stream] DM metadata returned ${metaRes.status}`); return null; }
+    const meta = await metaRes.json();
+
+    const qualities: { quality: string; url: string }[] = [];
+    let bestUrl: string | null = null;
+
+    // HLS manifest (most reliable — works with hls.js)
+    if (meta.qualities?.auto?.[0]?.url) {
+      bestUrl = meta.qualities.auto[0].url;
+    }
+
+    // Direct MP4 qualities
+    for (const q of ['240', '380', '480', '720', '1080', '1440', '2160']) {
+      const entry = meta.qualities?.[q];
+      if (entry?.[0]?.url) {
+        const label = `${q}p`;
+        qualities.push({ quality: label, url: entry[0].url });
+        if (!bestUrl || parseInt(q) >= 720) bestUrl = entry[0].url;
+      }
+    }
+
+    if (!bestUrl && qualities.length > 0) bestUrl = qualities[qualities.length - 1].url;
+    if (!bestUrl) return null;
+    return { videoUrl: bestUrl, qualities };
+  } catch (err) {
+    console.error('[stream] Dailymotion resolve error:', err);
+    return null;
+  }
+}
+
+async function resolveInternetArchive(url: string): Promise<{ videoUrl: string; qualities: { quality: string; url: string }[] } | null> {
+  // Direct download link — already playable
+  const dlMatch = url.match(/archive\.org\/download\/([^\/\?\#]+)\/(.+\.(?:mp4|webm|ogv))/i);
+  if (dlMatch) return { videoUrl: url, qualities: [] };
+
+  const match = url.match(/archive\.org\/(?:details|embed)\/([^\/\?\#]+)/);
+  if (!match?.[1]) return null;
+  const itemId = match[1];
+
+  try {
+    const metaRes = await fetch(`https://archive.org/metadata/${itemId}`, { signal: AbortSignal.timeout(10000) });
+    if (!metaRes.ok) return null;
+    const meta = await metaRes.json();
+    const files = meta.files || [];
+    const baseUrl = `https://archive.org/download/${itemId}`;
+
+    const videoFiles = files
+      .filter((f: any) => /\.(mp4|webm|ogv)$/i.test(f.name || ''))
+      .map((f: any) => ({
+        name: f.name,
+        url: `${baseUrl}/${encodeURIComponent(f.name)}`,
+        size: parseInt(f.size) || 0,
+        height: f.height ? parseInt(f.height) : null,
+      }))
+      .sort((a: any, b: any) => b.size - a.size);
+
+    if (videoFiles.length === 0) return null;
+
+    const qualities: { quality: string; url: string }[] = [];
+    const usedLabels = new Set<string>();
+    for (const vf of videoFiles) {
+      let label: string;
+      if (vf.height) {
+        label = vf.height >= 2160 ? '4K' : vf.height >= 1080 ? '1080p' : vf.height >= 720 ? '720p' : vf.height >= 480 ? '480p' : `${vf.height}p`;
+      } else {
+        const name = vf.name.toLowerCase();
+        if (name.includes('1080')) label = '1080p';
+        else if (name.includes('720')) label = '720p';
+        else if (name.includes('480')) label = '480p';
+        else if (vf.size > 2_000_000_000) label = '1080p';
+        else if (vf.size > 700_000_000) label = '720p';
+        else label = '480p';
+      }
+      if (!usedLabels.has(label)) {
+        usedLabels.add(label);
+        qualities.push({ quality: label, url: vf.url });
+      }
+    }
+
+    return { videoUrl: videoFiles[0].url, qualities };
+  } catch (err) {
+    console.error('[stream] Internet Archive resolve error:', err);
+    return null;
+  }
+}
+
+// ── Main handler ────────────────────────────────────────────────────────────
 
 export async function GET(req: Request) {
   try {
@@ -81,11 +167,11 @@ export async function GET(req: Request) {
     const quality  = searchParams.get('quality');
     const hls      = searchParams.get('hls');
 
-    // ── Multi-quality / HLS path ──────────────────────────────────────────
+    // ── Multi-quality / HLS / External path ──────────────────────────────
     if (movieId) {
       const { data: movie } = await supabase
         .from('movies')
-        .select('blob_name, quality_variants, hls_master_playlist')
+        .select('*')
         .eq('id', movieId)
         .single();
 
@@ -93,22 +179,92 @@ export async function GET(req: Request) {
         return NextResponse.json({ error: 'Movie not found' }, { status: 404 });
       }
 
+      // ── External URL — resolve inline (no internal HTTP call) ─────────
+      // Detect external by ingest_method OR blob_name prefix (for pre-migration DBs)
+      const isExternal = movie.ingest_method === 'external_url'
+        || (movie.blob_name && movie.blob_name.startsWith('external://'));
+
+      if (isExternal) {
+        // external_url may not exist if migration hasn't been run — fall back to blob_url
+        const externalUrl = movie.external_url || movie.blob_url || '';
+        // Extract provider from blob_name "external://dailymotion" or from external_provider column
+        const provider = movie.external_provider
+          || (movie.blob_name?.startsWith('external://') ? movie.blob_name.replace('external://', '') : '')
+          || '';
+
+        if (!externalUrl || externalUrl.startsWith('external://')) {
+          return NextResponse.json({
+            error: 'No playable URL stored for this external movie',
+            external: true,
+            provider,
+          }, { status: 400 });
+        }
+
+        let resolved: { videoUrl: string; qualities: { quality: string; url: string }[] } | null = null;
+
+        if (provider === 'dailymotion' || externalUrl.includes('dailymotion.com') || externalUrl.includes('dai.ly')) {
+          resolved = await resolveDailymotion(externalUrl);
+        } else if (provider === 'archive.org' || externalUrl.includes('archive.org')) {
+          resolved = await resolveInternetArchive(externalUrl);
+        } else if (/\.(mp4|webm|m3u8|ogv)(\?.*)?$/i.test(externalUrl)) {
+          resolved = { videoUrl: externalUrl, qualities: [] };
+        }
+
+        // Generic fallback — try HEAD to check if URL is directly playable
+        if (!resolved) {
+          try {
+            const headRes = await fetch(externalUrl, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(5000) });
+            const ct = headRes.headers.get('content-type') || '';
+            if (ct.startsWith('video/') || ct.includes('mp4') || ct.includes('mpegurl')) {
+              resolved = { videoUrl: externalUrl, qualities: [] };
+            }
+          } catch {}
+        }
+
+        if (resolved) {
+          // Wrap URLs through our proxy to bypass CORS
+          const origin = new URL(req.url).origin;
+          const proxyUrl = (rawUrl: string) =>
+            `${origin}/api/external/proxy?url=${encodeURIComponent(rawUrl)}`;
+
+          const proxiedUrl = proxyUrl(resolved.videoUrl);
+          const proxiedVariants = resolved.qualities.length > 0
+            ? resolved.qualities.map(q => ({ quality: q.quality, url: proxyUrl(q.url) }))
+            : undefined;
+
+          return NextResponse.json({
+            url: proxiedUrl,
+            external: true,
+            provider,
+            type: 'direct',
+            variants: proxiedVariants,
+          });
+        }
+
+        // Last resort — return stored URL. If it's a page URL, it won't play,
+        // but at least the frontend can show an error instead of hanging.
+        return NextResponse.json({
+          url: externalUrl,
+          external: true,
+          provider,
+          type: 'direct',
+          error: 'Could not resolve to a playable video URL',
+        });
+      }
+
       const variants: QualityVariant[] | null = movie.quality_variants;
 
-      // ── Serve dynamic HLS master playlist ────────────────────────────
+      // ── Serve dynamic HLS master playlist ──────────────────────────────
       if (hls === 'master' && variants) {
         const content = buildDynamicMasterPlaylist(variants);
         if (content) {
           return new Response(content, {
-            headers: {
-              'Content-Type': 'application/vnd.apple.mpegurl',
-              'Cache-Control': 'no-cache, no-store',
-            },
+            headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache, no-store' },
           });
         }
       }
 
-      // ── Serve per-quality HLS playlist ───────────────────────────────
+      // ── Serve per-quality HLS playlist ─────────────────────────────────
       if (hls && hls !== 'master' && variants) {
         const variant = variants.find(v => v.quality === hls);
         if (variant?.hls_playlist) {
@@ -117,7 +273,7 @@ export async function GET(req: Request) {
         }
       }
 
-      // ── Quality variants — return SAS URLs ──────────────────────────
+      // ── Quality variants — return SAS URLs ─────────────────────────────
       if (variants && variants.length > 0) {
         const variantUrls = variants.map(v => ({
           quality: v.quality,
@@ -127,23 +283,11 @@ export async function GET(req: Request) {
 
         if (quality) {
           const match = variantUrls.find(v => v.quality === quality);
-          if (match) {
-            return NextResponse.json({
-              url: match.url,
-              variants: variantUrls,
-            });
-          }
+          if (match) return NextResponse.json({ url: match.url, variants: variantUrls });
         }
 
-        // Default: highest quality as primary
-        const sorted = [...variantUrls].sort((a, b) =>
-          (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0),
-        );
-
-        return NextResponse.json({
-          url: sorted[0].url,
-          variants: variantUrls,
-        });
+        const sorted = [...variantUrls].sort((a, b) => (QUALITY_ORDER[b.quality] ?? 0) - (QUALITY_ORDER[a.quality] ?? 0));
+        return NextResponse.json({ url: sorted[0].url, variants: variantUrls });
       }
 
       // Fallback: no variants
@@ -151,7 +295,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ url });
     }
 
-    // ── Legacy single-quality path ────────────────────────────────────────
+    // ── Legacy single-quality path ───────────────────────────────────────
     if (!blobName) {
       return NextResponse.json({ error: 'blobName or movieId is required' }, { status: 400 });
     }

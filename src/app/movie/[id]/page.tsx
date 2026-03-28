@@ -728,6 +728,10 @@ export default function MovieDetailPage() {
     setSubtitleFetchMsg('');
     try {
       const langs = ['en', 'ar', ...subtitleLangs.filter((l) => l !== 'en' && l !== 'ar')];
+      // For external movies, don't send the blob_name (it's "external://provider")
+      const isExternal = movie.ingest_method === 'external_url';
+      const effectiveBlobName = isExternal ? undefined : (movie.blob_name || undefined);
+
       const res = await fetch('/api/subtitles/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -735,9 +739,12 @@ export default function MovieDetailPage() {
           movie_id: movie.id,
           imdb_id: movie.imdb_id || undefined,
           tmdb_id: movie.tmdb_id || undefined,
-          query: movie.title,
+          query: movie.series_name || movie.title,
           languages: langs,
-          blob_name: movie.blob_name || undefined,
+          blob_name: effectiveBlobName,
+          // TV episode info for subtitle matching
+          season_number: movie.season_number || undefined,
+          episode_number: movie.episode_number || undefined,
         }),
       });
       const data = await res.json();
@@ -917,8 +924,15 @@ export default function MovieDetailPage() {
               )}
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-surface border border-cinema-border text-sm text-cinema-text-muted hover:border-cinema-secondary/40 hover:text-cinema-secondary transition-all duration-200 cursor-default">
                 <HardDrive className="w-3.5 h-3.5" />
-                {formatFileSize(movie.file_size)}
+                {movie.ingest_method === 'external_url' ? 'External Link' : formatFileSize(movie.file_size)}
               </div>
+              {movie.ingest_method === 'external_url' && movie.external_provider && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cinema-warm/10 border border-cinema-warm/20 text-sm text-cinema-warm cursor-default">
+                  <Globe className="w-3.5 h-3.5" />
+                  {movie.external_provider}
+                  <span className="text-[9px] font-bold uppercase tracking-wider opacity-70 ml-0.5">Beta</span>
+                </div>
+              )}
               {movie.subtitles && movie.subtitles.length > 0 && movie.subtitles.map((s) => {
                 const options = movie.subtitle_options?.[s.lang];
                 const totalCandidates = options?.candidates?.length || 0;

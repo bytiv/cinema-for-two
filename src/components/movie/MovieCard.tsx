@@ -2,7 +2,7 @@
 
 import { Movie } from '@/types';
 import { formatDuration } from '@/lib/utils';
-import { Play, Star } from 'lucide-react';
+import { Play, Star, Globe } from 'lucide-react';
 import Link from 'next/link';
 import AzurePosterImage from './AzurePosterImage';
 
@@ -25,10 +25,18 @@ export default function MovieCard({ movie }: MovieCardProps) {
 
   const genres = Array.isArray(movie.genres) ? movie.genres : [];
   const overview = movie.description || '';
+  const isExternal = movie.ingest_method === 'external_url';
 
   return (
     <Link href={`/movie/${movie.id}`} className="group block">
       <div className="relative aspect-[2/3] rounded-xl overflow-hidden bg-cinema-card border border-cinema-border transition-all duration-300 ease-in-out hover:scale-[1.05] hover:shadow-[0_8px_40px_rgba(232,160,191,0.25)] hover:border-cinema-accent/50 cursor-pointer">
+
+        {/* External badge */}
+        {isExternal && (
+          <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-cinema-warm/90 text-[9px] text-white font-bold uppercase tracking-wider backdrop-blur-sm">
+            <Globe className="w-2.5 h-2.5" /> Link
+          </div>
+        )}
 
         {/* Poster image — always visible */}
         {movie.poster_url ? (

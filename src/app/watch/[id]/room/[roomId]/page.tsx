@@ -34,6 +34,8 @@ export default function WatchRoomPage() {
   const [showEndConfirm,  setShowEndConfirm]  = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [isMobile,        setIsMobile]        = useState(false);
+  const [isExternalEmbed, setIsExternalEmbed] = useState(false);
+  const [externalProvider, setExternalProvider] = useState<string | null>(null);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -62,21 +64,40 @@ export default function WatchRoomPage() {
 
     if (movieRes.data) {
       setMovie(movieRes.data);
-      const hasVariants = movieRes.data.quality_variants && movieRes.data.quality_variants.length > 0;
 
-      if (hasVariants) {
-        // Multi-quality: use movieId-based streaming API
+      // Detect external movies by ingest_method OR blob_name prefix
+      const isExternal = movieRes.data.ingest_method === 'external_url'
+        || (movieRes.data.blob_name && movieRes.data.blob_name.startsWith('external://'));
+
+      if (isExternal) {
+        // ── External URL movies — always use movieId path for resolution ──
         const res = await fetch(`/api/movies/stream?movieId=${encodeURIComponent(movieRes.data.id)}`);
         if (res.ok) {
           const data = await res.json();
-          setVideoUrl(data.url);
-          if (data.variants) setVideoVariants(data.variants);
-          if (data.hlsMasterUrl) setHlsMasterUrl(data.hlsMasterUrl);
+          if (data.url && !data.error) {
+            setVideoUrl(data.url);
+            setIsExternalEmbed(true);
+            if (data.provider) setExternalProvider(data.provider);
+            if (data.variants && data.variants.length > 0) {
+              setVideoVariants(data.variants);
+            }
+          }
         }
       } else {
-        // Legacy single-quality: use blobName
-        const res = await fetch(`/api/movies/stream?blobName=${encodeURIComponent(movieRes.data.blob_name)}`);
-        if (res.ok) { const { url } = await res.json(); setVideoUrl(url); }
+        const hasVariants = movieRes.data.quality_variants && movieRes.data.quality_variants.length > 0;
+
+        if (hasVariants) {
+          const res = await fetch(`/api/movies/stream?movieId=${encodeURIComponent(movieRes.data.id)}`);
+          if (res.ok) {
+            const data = await res.json();
+            setVideoUrl(data.url);
+            if (data.variants) setVideoVariants(data.variants);
+            if (data.hlsMasterUrl) setHlsMasterUrl(data.hlsMasterUrl);
+          }
+        } else {
+          const res = await fetch(`/api/movies/stream?blobName=${encodeURIComponent(movieRes.data.blob_name)}`);
+          if (res.ok) { const { url } = await res.json(); setVideoUrl(url); }
+        }
       }
     }
     if (profileRes.data) setCurrentUser({ id: user.id, profile: profileRes.data });
@@ -248,6 +269,13 @@ export default function WatchRoomPage() {
             hlsMasterUrl={hlsMasterUrl}
             className="w-full h-full"
           />
+          {/* External source badge */}
+          {isExternalEmbed && externalProvider && (
+            <div className="absolute top-3 left-3 z-40 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/60 backdrop-blur-md border border-white/10 pointer-events-none">
+              <span className="w-1.5 h-1.5 rounded-full bg-cinema-warm animate-pulse" />
+              <span className="text-[10px] text-white/60 font-medium">{externalProvider}</span>
+            </div>
+          )}
         </div>
 
         {/* Desktop sidebar chat */}

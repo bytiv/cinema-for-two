@@ -32,13 +32,20 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
-
-  // Protected routes
+  // Determine if this route actually needs auth checks
   const protectedPaths = ['/browse', '/movie', '/watch', '/upload', '/profile', '/friends'];
   const isProtected = protectedPaths.some(path => request.nextUrl.pathname.startsWith(path));
   const isAdminPath = request.nextUrl.pathname.startsWith('/admin');
   const isPendingPath = request.nextUrl.pathname === '/pending-approval';
+  const authPaths = ['/auth/login', '/auth/signup'];
+  const isAuthPath = authPaths.includes(request.nextUrl.pathname);
+
+  // Skip Supabase calls entirely for public/non-sensitive routes
+  const needsAuth = isProtected || isAdminPath || isPendingPath || isAuthPath;
+  if (!needsAuth) return response;
+
+  // Single getUser call — this refreshes the session cookie too
+  const { data: { user } } = await supabase.auth.getUser();
 
   if ((isProtected || isAdminPath) && !user) {
     const loginUrl = new URL('/auth/login', request.url);
@@ -46,7 +53,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // If user is logged in, check approval status for protected routes
+  // Only query profiles DB when needed (protected routes + logged in user)
   if (user && (isProtected || isAdminPath)) {
     const { data: profile } = await supabase
       .from('profiles')
@@ -55,27 +62,20 @@ export async function updateSession(request: NextRequest) {
       .single();
 
     if (profile) {
-      // If pending or denied, redirect to pending page (unless they're already there)
       if (profile.status !== 'approved' && !isPendingPath) {
         return NextResponse.redirect(new URL('/pending-approval', request.url));
       }
-
-      // Admin page: only admins allowed
       if (isAdminPath && profile.role !== 'admin') {
         return NextResponse.redirect(new URL('/browse', request.url));
       }
     }
   }
 
-  // Allow pending users to see the pending page
   if (isPendingPath && !user) {
-    const loginUrl = new URL('/auth/login', request.url);
-    return NextResponse.redirect(loginUrl);
+    return NextResponse.redirect(new URL('/auth/login', request.url));
   }
 
-  // Redirect logged-in users away from auth pages
-  const authPaths = ['/auth/login', '/auth/signup'];
-  if (authPaths.includes(request.nextUrl.pathname) && user) {
+  if (isAuthPath && user) {
     return NextResponse.redirect(new URL('/browse', request.url));
   }
 
