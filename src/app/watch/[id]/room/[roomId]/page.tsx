@@ -36,6 +36,7 @@ export default function WatchRoomPage() {
   const [isMobile,        setIsMobile]        = useState(false);
   const [isExternalEmbed, setIsExternalEmbed] = useState(false);
   const [externalProvider, setExternalProvider] = useState<string | null>(null);
+  const [embedUrl, setEmbedUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -74,10 +75,17 @@ export default function WatchRoomPage() {
         const res = await fetch(`/api/movies/stream?movieId=${encodeURIComponent(movieRes.data.id)}`);
         if (res.ok) {
           const data = await res.json();
-          if (data.url && !data.error) {
+          if (data.provider) setExternalProvider(data.provider);
+          setIsExternalEmbed(true);
+
+          if (data.type === 'embed' && data.url) {
+            // Embed mode — use iframe (e.g. Dailymotion)
+            setEmbedUrl(data.url);
+            // Set a dummy videoUrl so the "could not load" screen doesn't show
+            setVideoUrl('__embed__');
+          } else if (data.url && !data.error) {
+            // Direct video URL mode
             setVideoUrl(data.url);
-            setIsExternalEmbed(true);
-            if (data.provider) setExternalProvider(data.provider);
             if (data.variants && data.variants.length > 0) {
               setVideoVariants(data.variants);
             }
@@ -259,16 +267,30 @@ export default function WatchRoomPage() {
 
         {/* Video */}
         <div className="relative bg-black flex-1 min-h-0">
-          <VideoPlayer
-            src={videoUrl}
-            subtitles={(movie as any).subtitles || []}
-            initialTime={isWatchTogether ? watchRoom.savedTime : 0}
-            onPlaybackEvent={handlePlaybackEvent}
-            externalControl={externalControl}
-            qualityVariants={videoVariants}
-            hlsMasterUrl={hlsMasterUrl}
-            className="w-full h-full"
-          />
+          {embedUrl ? (
+            /* ── Embed player (Dailymotion, etc.) ── */
+            <div className="w-full h-full relative">
+              <iframe
+                src={embedUrl}
+                className="absolute inset-0 w-full h-full"
+                allow="autoplay; fullscreen; picture-in-picture; web-share"
+                allowFullScreen
+                frameBorder="0"
+                style={{ border: 'none' }}
+              />
+            </div>
+          ) : (
+            <VideoPlayer
+              src={videoUrl}
+              subtitles={(movie as any).subtitles || []}
+              initialTime={isWatchTogether ? watchRoom.savedTime : 0}
+              onPlaybackEvent={handlePlaybackEvent}
+              externalControl={externalControl}
+              qualityVariants={videoVariants}
+              hlsMasterUrl={hlsMasterUrl}
+              className="w-full h-full"
+            />
+          )}
           {/* External source badge */}
           {isExternalEmbed && externalProvider && (
             <div className="absolute top-3 left-3 z-40 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/60 backdrop-blur-md border border-white/10 pointer-events-none">

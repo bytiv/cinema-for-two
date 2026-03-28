@@ -54,47 +54,10 @@ function buildDynamicMasterPlaylist(variants: QualityVariant[]): string | null {
 
 // ── Inline external URL resolvers (no internal HTTP calls) ──────────────────
 
-async function resolveDailymotion(url: string): Promise<{ videoUrl: string; qualities: { quality: string; url: string }[] } | null> {
+function extractDailymotionId(url: string): string | null {
   const patterns = [/dailymotion\.com\/video\/([a-zA-Z0-9]+)/, /dai\.ly\/([a-zA-Z0-9]+)/, /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/];
-  let videoId: string | null = null;
-  for (const re of patterns) { const m = url.match(re); if (m?.[1]) { videoId = m[1]; break; } }
-  if (!videoId) return null;
-
-  try {
-    const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!metaRes.ok) { console.warn(`[stream] DM metadata returned ${metaRes.status}`); return null; }
-    const meta = await metaRes.json();
-
-    const qualities: { quality: string; url: string }[] = [];
-    let bestUrl: string | null = null;
-
-    // PREFER direct MP4 qualities over HLS — MP4s proxy cleanly,
-    // HLS manifests contain segment URLs that still point to DM CDN (CORS fail)
-    for (const q of ['240', '380', '480', '720', '1080', '1440', '2160']) {
-      const entry = meta.qualities?.[q];
-      if (entry?.[0]?.url) {
-        const label = `${q}p`;
-        qualities.push({ quality: label, url: entry[0].url });
-        // Pick the highest available as best
-        bestUrl = entry[0].url;
-      }
-    }
-
-    // Only fall back to HLS if zero MP4 qualities found
-    if (!bestUrl && meta.qualities?.auto?.[0]?.url) {
-      bestUrl = meta.qualities.auto[0].url;
-    }
-
-    if (!bestUrl && qualities.length > 0) bestUrl = qualities[qualities.length - 1].url;
-    if (!bestUrl) return null;
-    return { videoUrl: bestUrl, qualities };
-  } catch (err) {
-    console.error('[stream] Dailymotion resolve error:', err);
-    return null;
-  }
+  for (const re of patterns) { const m = url.match(re); if (m?.[1]) return m[1]; }
+  return null;
 }
 
 async function resolveInternetArchive(url: string): Promise<{ videoUrl: string; qualities: { quality: string; url: string }[] } | null> {
@@ -202,11 +165,32 @@ export async function GET(req: Request) {
           }, { status: 400 });
         }
 
+        // ── Dailymotion: use their official embed player ──
+        // Scraping HLS/MP4 streams violates their TOS and the URLs expire quickly.
+        // The embed player is the correct, reliable approach.
+        if (provider === 'dailymotion' || externalUrl.includes('dailymotion.com') || externalUrl.includes('dai.ly')) {
+          const videoId = extractDailymotionId(externalUrl);
+          if (videoId) {
+            return NextResponse.json({
+              url: `https://geo.dailymotion.com/player.html?video=${videoId}`,
+              external: true,
+              provider: 'dailymotion',
+              type: 'embed',
+              embedVideoId: videoId,
+            });
+          }
+          // If we can't extract the ID, return an error
+          return NextResponse.json({
+            error: 'Could not extract Dailymotion video ID from URL',
+            external: true,
+            provider: 'dailymotion',
+          }, { status: 400 });
+        }
+
+        // ── Other providers: resolve to direct playable URLs ──
         let resolved: { videoUrl: string; qualities: { quality: string; url: string }[] } | null = null;
 
-        if (provider === 'dailymotion' || externalUrl.includes('dailymotion.com') || externalUrl.includes('dai.ly')) {
-          resolved = await resolveDailymotion(externalUrl);
-        } else if (provider === 'archive.org' || externalUrl.includes('archive.org')) {
+        if (provider === 'archive.org' || externalUrl.includes('archive.org')) {
           resolved = await resolveInternetArchive(externalUrl);
         } else if (/\.(mp4|webm|m3u8|ogv)(\?.*)?$/i.test(externalUrl)) {
           resolved = { videoUrl: externalUrl, qualities: [] };
@@ -292,7 +276,13 @@ export async function GET(req: Request) {
         return NextResponse.json({ url: sorted[0].url, variants: variantUrls });
       }
 
-      // Fallback: no variants
+      // Fallback: no variants — but guard against external:// pseudo names
+      if (movie.blob_name && movie.blob_name.startsWith('external://')) {
+        return NextResponse.json({
+          error: 'External movie with no resolved URL',
+          external: true,
+        }, { status: 400 });
+      }
       const url = generateReadSasUrl(CONTAINERS.movies, movie.blob_name, 4);
       return NextResponse.json({ url });
     }
@@ -300,6 +290,11 @@ export async function GET(req: Request) {
     // ── Legacy single-quality path ───────────────────────────────────────
     if (!blobName) {
       return NextResponse.json({ error: 'blobName or movieId is required' }, { status: 400 });
+    }
+
+    // Guard: never generate SAS URLs for external:// pseudo blob names
+    if (blobName.startsWith('external://')) {
+      return NextResponse.json({ error: 'External movie — use movieId parameter instead' }, { status: 400 });
     }
 
     const url = generateReadSasUrl(CONTAINERS.movies, blobName, 4);

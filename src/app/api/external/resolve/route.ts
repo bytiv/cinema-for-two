@@ -21,13 +21,15 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 export const dynamic = 'force-dynamic';
 
 // ── Dailymotion resolver ─────────────────────────────────────────────────────
-// Uses their oEmbed + player metadata to extract MP4 stream URLs
+// Uses official embed player instead of scraping streams (which violates TOS
+// and breaks because HLS segment URLs expire / are CORS-blocked).
 
-async function resolveDailymotion(url: string): Promise<{
+function resolveDailymotion(url: string): {
   videoUrl: string;
   qualities: { quality: string; url: string }[];
-} | null> {
-  // Extract video ID
+  type: 'embed';
+  embedVideoId: string;
+} | null {
   const patterns = [
     /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,
     /dai\.ly\/([a-zA-Z0-9]+)/,
@@ -40,68 +42,12 @@ async function resolveDailymotion(url: string): Promise<{
   }
   if (!videoId) return null;
 
-  try {
-    // Dailymotion player metadata endpoint — returns stream URLs
-    const metaRes = await fetch(
-      `https://www.dailymotion.com/player/metadata/video/${videoId}`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-        signal: AbortSignal.timeout(10000),
-      },
-    );
-
-    if (!metaRes.ok) return null;
-    const meta = await metaRes.json();
-
-    // Extract qualities from the metadata
-    const qualities: { quality: string; url: string }[] = [];
-    let bestUrl: string | null = null;
-
-    // Check for HLS manifest
-    if (meta.qualities?.auto?.[0]?.url) {
-      // The auto quality URL is typically an HLS manifest
-      const hlsUrl = meta.qualities.auto[0].url;
-      // Try to fetch the manifest and extract individual quality URLs
-      try {
-        const hlsRes = await fetch(hlsUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (hlsRes.ok) {
-          bestUrl = hlsUrl;
-          // We'll use HLS — the VideoPlayer already supports it via hls.js
-        }
-      } catch {}
-    }
-
-    // Check for direct MP4 qualities
-    const qualityKeys = ['240', '380', '480', '720', '1080', '1440', '2160'];
-    for (const q of qualityKeys) {
-      const entry = meta.qualities?.[q];
-      if (entry?.[0]?.url) {
-        const qUrl = entry[0].url;
-        const label = q === '240' ? '240p' : q === '380' ? '380p' : q === '480' ? '480p'
-          : q === '720' ? '720p' : q === '1080' ? '1080p' : q === '1440' ? '1440p' : '4K';
-        qualities.push({ quality: label, url: qUrl });
-        if (!bestUrl || parseInt(q) >= 720) {
-          bestUrl = qUrl;
-        }
-      }
-    }
-
-    if (!bestUrl && qualities.length > 0) {
-      bestUrl = qualities[qualities.length - 1].url;
-    }
-
-    if (!bestUrl) return null;
-
-    return { videoUrl: bestUrl, qualities };
-  } catch (err) {
-    console.error('[resolve] Dailymotion error:', err);
-    return null;
-  }
+  return {
+    videoUrl: `https://geo.dailymotion.com/player.html?video=${videoId}`,
+    qualities: [],
+    type: 'embed',
+    embedVideoId: videoId,
+  };
 }
 
 // ── Internet Archive resolver ────────────────────────────────────────────────
@@ -226,11 +172,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'url parameter required' }, { status: 400 });
     }
 
-    let result: { videoUrl: string; qualities: { quality: string; url: string }[] } | null = null;
+    let result: { videoUrl: string; qualities: { quality: string; url: string }[]; type?: string; embedVideoId?: string } | null = null;
 
     // Route to the right resolver
     if (provider === 'dailymotion' || url.includes('dailymotion.com') || url.includes('dai.ly')) {
-      result = await resolveDailymotion(url);
+      result = resolveDailymotion(url);
     } else if (provider === 'archive.org' || url.includes('archive.org')) {
       result = await resolveInternetArchive(url);
     } else if (provider === 'direct' || /\.(mp4|webm|m3u8|ogv)(\?.*)?$/i.test(url)) {
@@ -252,7 +198,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       videoUrl: result.videoUrl,
       qualities: result.qualities.length > 0 ? result.qualities : undefined,
-      type: 'direct',
+      type: result.type || 'direct',
+      ...(result.embedVideoId ? { embedVideoId: result.embedVideoId } : {}),
     });
   } catch (err: any) {
     console.error('[external/resolve]', err.message);
