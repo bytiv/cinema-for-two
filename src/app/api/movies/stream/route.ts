@@ -71,19 +71,21 @@ async function resolveDailymotion(url: string): Promise<{ videoUrl: string; qual
     const qualities: { quality: string; url: string }[] = [];
     let bestUrl: string | null = null;
 
-    // HLS manifest (most reliable — works with hls.js)
-    if (meta.qualities?.auto?.[0]?.url) {
-      bestUrl = meta.qualities.auto[0].url;
-    }
-
-    // Direct MP4 qualities
+    // PREFER direct MP4 qualities over HLS — MP4s proxy cleanly,
+    // HLS manifests contain segment URLs that still point to DM CDN (CORS fail)
     for (const q of ['240', '380', '480', '720', '1080', '1440', '2160']) {
       const entry = meta.qualities?.[q];
       if (entry?.[0]?.url) {
         const label = `${q}p`;
         qualities.push({ quality: label, url: entry[0].url });
-        if (!bestUrl || parseInt(q) >= 720) bestUrl = entry[0].url;
+        // Pick the highest available as best
+        bestUrl = entry[0].url;
       }
+    }
+
+    // Only fall back to HLS if zero MP4 qualities found
+    if (!bestUrl && meta.qualities?.auto?.[0]?.url) {
+      bestUrl = meta.qualities.auto[0].url;
     }
 
     if (!bestUrl && qualities.length > 0) bestUrl = qualities[qualities.length - 1].url;

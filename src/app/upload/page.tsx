@@ -2006,9 +2006,16 @@ export default function UploadPage() {
         if (extSelectedEpisode) {
           params.set('episode', String(extSelectedEpisode.episode_number));
           if (extSelectedEpisode.name) params.set('episode_title', extSelectedEpisode.name);
+          if (extSelectedEpisode.runtime) params.set('runtime', String(extSelectedEpisode.runtime));
+          if (extSelectedEpisode.air_date) params.set('air_date', extSelectedEpisode.air_date);
+          if (extSelectedEpisode.overview) params.set('episode_overview', extSelectedEpisode.overview.slice(0, 200));
         }
+        // Also pass original language from the TV show
+        if (tmdb.language) params.set('language', tmdb.language);
       } else {
         params.set('media_type', 'movie');
+        if ('runtime' in tmdb && tmdb.runtime) params.set('runtime', String(tmdb.runtime));
+        if (tmdb.language) params.set('language', tmdb.language);
       }
       const res = await fetch(`/api/external/search?${params.toString()}`);
       const data = await res.json();
@@ -3857,9 +3864,28 @@ export default function UploadPage() {
                               {source.year && (
                                 <span className="text-[10px] text-cinema-text-dim">{source.year}</span>
                               )}
-                              {source.duration && (
-                                <span className="text-[10px] text-cinema-text-dim">{source.duration}</span>
-                              )}
+                              {source.duration && (() => {
+                                // Compare with expected runtime if available
+                                const expectedMins = extSelectedEpisode?.runtime
+                                  || (extSelectedTmdb && 'runtime' in extSelectedTmdb ? extSelectedTmdb.runtime : null);
+                                const durationNum = parseInt(source.duration);
+                                const isClose = expectedMins && durationNum
+                                  ? Math.abs(durationNum - expectedMins) <= 15
+                                  : null;
+                                const isFar = expectedMins && durationNum
+                                  ? durationNum < expectedMins * 0.5 || durationNum > expectedMins * 1.5
+                                  : false;
+                                return (
+                                  <span className={cn('text-[10px]',
+                                    isClose === true ? 'text-cinema-success font-medium' :
+                                    isFar ? 'text-cinema-error' : 'text-cinema-text-dim'
+                                  )}>
+                                    {source.duration}
+                                    {expectedMins && isClose === true && ' ✓'}
+                                    {expectedMins && isFar && ' ✗'}
+                                  </span>
+                                );
+                              })()}
                               {source.views != null && source.views > 0 && (
                                 <span className="text-[10px] text-cinema-text-dim">{source.views.toLocaleString()} views</span>
                               )}
