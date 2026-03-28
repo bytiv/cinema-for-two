@@ -83,23 +83,16 @@ export default function SpaceBackground() {
     window.addEventListener('resize', resize);
 
     let t = 0;
-    let lastFrame = 0;
-    const FRAME_INTERVAL = 200; // ~5fps — stars barely move, save massive CPU
 
-    function draw(now: number) {
+    function draw() {
       if (!ctx || !canvas) return;
+      t += 0.016;
 
-      // Throttle: only actually draw every 200ms
-      if (now - lastFrame < FRAME_INTERVAL) {
-        rafRef.current = requestAnimationFrame(draw);
-        return;
-      }
-      lastFrame = now;
-      t += 0.2;
-
+      // Pure #0f0a1a — matches navbar bg-cinema-bg exactly
       ctx.fillStyle = '#0f0a1a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+      // Draw every star with its own flicker phase
       for (const s of starsRef.current) {
         const flicker = 0.5 + 0.5 * Math.sin(t * s.speed + s.phase);
         const alpha   = s.baseAlpha * (0.45 + 0.55 * flicker);

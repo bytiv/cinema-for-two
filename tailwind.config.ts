@@ -30,9 +30,9 @@ const config: Config = {
         },
       },
       fontFamily: {
-        display: ['var(--font-display)', '"Playfair Display"', 'serif'],
-        body: ['var(--font-body)', '"DM Sans"', 'sans-serif'],
-        mono: ['var(--font-mono)', '"JetBrains Mono"', 'monospace'],
+        display: ['"Playfair Display"', 'serif'],
+        body: ['"DM Sans"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
       },
       animation: {
         'float-slow': 'float 20s ease-in-out infinite',
