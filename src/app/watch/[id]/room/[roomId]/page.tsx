@@ -13,6 +13,37 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import InviteFriendModal from '@/components/watch/InviteFriendModal';
 
+// ── Dailymotion Embed Component ──────────────────────────────────────────────
+// Uses an iframe to Dailymotion's official embed endpoint.
+// The iframe is absolutely positioned inside the parent flex container
+// so it fills the available space without breaking the page layout.
+function DailymotionEmbed({ embedUrl }: { embedUrl: string }) {
+  const videoId = (() => {
+    try {
+      return new URL(embedUrl).searchParams.get('video') || null;
+    } catch { return null; }
+  })();
+
+  // Build the proper embed URL with useful params
+  const src = videoId
+    ? `https://www.dailymotion.com/embed/video/${videoId}?autoplay=0&queue-enable=false&sharing-enable=false`
+    : embedUrl;
+
+  return (
+    <div className="w-full h-full relative bg-black">
+      <iframe
+        src={src}
+        className="absolute inset-0 w-full h-full"
+        allow="autoplay; fullscreen; picture-in-picture; web-share"
+        allowFullScreen
+        frameBorder="0"
+        style={{ border: 'none' }}
+        referrerPolicy="no-referrer-when-downgrade"
+      />
+    </div>
+  );
+}
+
 export default function WatchRoomPage() {
   const params   = useParams();
   const router   = useRouter();
@@ -269,16 +300,7 @@ export default function WatchRoomPage() {
         <div className="relative bg-black flex-1 min-h-0">
           {embedUrl ? (
             /* ── Embed player (Dailymotion, etc.) ── */
-            <div className="w-full h-full relative">
-              <iframe
-                src={embedUrl}
-                className="absolute inset-0 w-full h-full"
-                allow="autoplay; fullscreen; picture-in-picture; web-share"
-                allowFullScreen
-                frameBorder="0"
-                style={{ border: 'none' }}
-              />
-            </div>
+            <DailymotionEmbed embedUrl={embedUrl} />
           ) : (
             <VideoPlayer
               src={videoUrl}
